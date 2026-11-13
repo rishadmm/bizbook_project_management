@@ -1,0 +1,172 @@
+// Row types for every table (SPEC section 3). Dates are ISO YYYY-MM-DD text; booleans are 0/1.
+export type Nullable<T> = T | null;
+
+/** Role code (mirrors roles.code; legacy values admin/manager/... still occur in old rows). */
+export type Role = string;
+export type ClientType = "government" | "road_authority" | "telecom" | "utility" | "private" | "other";
+export type EntityType =
+  | "tender" | "revision" | "project" | "stage" | "subcontractor" | "assignment"
+  | "progress" | "invoice" | "certificate" | "loss";
+export type TenderKind = "tender" | "proposal" | "rfq" | "eoi";
+export type Category = "road" | "cable" | "pipeline" | "telecom" | "civil" | "other";
+export type QuantityUnit = "km" | "m" | "sqm" | "nos" | "lumpsum";
+export type TenderStatus =
+  | "draft" | "in_preparation" | "under_review" | "approved" | "submitted"
+  | "negotiation" | "won" | "lost" | "cancelled" | "no_bid";
+export type SectionStatus = "not_started" | "in_progress" | "completed";
+export type RevisionStatus = "draft" | "submitted" | "superseded" | "final";
+export type BudgetCategory = "manpower" | "material" | "equipment" | "services" | "subcontract" | "overhead" | "contingency";
+export type ReviewDecision = "pending" | "approved" | "changes_requested" | "rejected";
+export type NegotiationChannel = "meeting" | "email" | "call" | "letter" | "site_visit";
+export type LossReason = "price" | "technical" | "timeline" | "experience" | "compliance" | "relationship" | "scope" | "other";
+export type LossStatus = "open" | "in_review" | "closed";
+export type ProjectStatus = "planning" | "mobilizing" | "active" | "on_hold" | "completed" | "closed";
+export type StageStatus = "not_started" | "in_progress" | "delayed" | "on_hold" | "completed";
+export type SubcontractorStatus = "prospect" | "onboarding" | "approved" | "suspended" | "blacklisted";
+export type DocType = "trade_license" | "tax_certificate" | "insurance" | "hse_certificate" | "bank_letter" | "company_profile" | "iso" | "other";
+export type DocStatus = "pending" | "verified" | "expired" | "rejected";
+export type AssignmentStatus = "draft" | "active" | "suspended" | "completed" | "terminated";
+export type DelayResponsibility = "none" | "subcontractor" | "company" | "client" | "authority" | "weather" | "utility_clash" | "other";
+export type ProgressSource = "internal" | "portal";
+export type ProgressStatus = "submitted" | "verified" | "rejected";
+export type InvoiceStatus = "submitted" | "under_review" | "certified" | "approved" | "paid" | "rejected";
+export type CertType = "partial" | "substantial" | "final" | "taking_over";
+export type CertStatus = "draft" | "requested" | "issued" | "rejected";
+export type IssueStatus = "open" | "mitigating" | "closed";
+export type RagStatus = "green" | "amber" | "red" | "grey";
+
+interface Base { id: number; created_at: string }
+
+export interface Setting { key: string; value: Nullable<string>; created_at: string }
+export interface Department extends Base { name: string; code: Nullable<string>; head_user_id?: Nullable<number> }
+export interface User extends Base {
+  name: string; email: Nullable<string>; department_id: Nullable<number>; role: Role;
+  password_hash?: Nullable<string>; status?: "active" | "disabled" | "locked"; role_id?: Nullable<number>; phone?: Nullable<string>; job_title?: Nullable<string>;
+  must_change_password?: number; failed_attempts?: number; locked_until?: Nullable<string>; last_login_at?: Nullable<string>;
+  password_changed_at?: Nullable<string>; manager_id?: Nullable<number>;
+}
+export interface Client extends Base {
+  name: string; type: ClientType; contact_person: Nullable<string>; email: Nullable<string>;
+  phone: Nullable<string>; address: Nullable<string>; notes: Nullable<string>;
+}
+export interface Attachment extends Base {
+  entity_type: EntityType; entity_id: number; category: Nullable<string>; filename: string;
+  stored_path: string; mime: Nullable<string>; size: Nullable<number>; uploaded_by: Nullable<number>; note: Nullable<string>;
+}
+export interface ActivityLog extends Base {
+  entity_type: EntityType; entity_id: number; action: string; message: Nullable<string>; user_id: Nullable<number>;
+}
+export interface Tender extends Base {
+  code: string; title: string; client_id: Nullable<number>; kind: TenderKind; category: Category;
+  location: Nullable<string>; scope_summary: Nullable<string>; technical_spec: Nullable<string>;
+  quantity: Nullable<number>; quantity_unit: Nullable<QuantityUnit>;
+  issue_date: Nullable<string>; clarification_deadline: Nullable<string>; submission_deadline: Nullable<string>;
+  bid_bond_amount: Nullable<number>; estimated_value: Nullable<number>; status: TenderStatus;
+  current_revision_id: Nullable<number>; owner_id: Nullable<number>; probability_pct: Nullable<number>;
+  submitted_at: Nullable<string>; decided_at: Nullable<string>; won_value: Nullable<number>; project_id: Nullable<number>;
+}
+export interface TenderSection extends Base {
+  tender_id: number; department_id: Nullable<number>; title: string; content: Nullable<string>;
+  status: SectionStatus; assignee_id: Nullable<number>; due_date: Nullable<string>; completed_at: Nullable<string>;
+}
+export interface TenderRevision extends Base {
+  tender_id: number; rev_no: number; label: Nullable<string>; reason: Nullable<string>; status: RevisionStatus;
+  total_cost: number; total_price: number; margin_pct: number; submitted_at: Nullable<string>;
+  client_feedback: Nullable<string>; created_by: Nullable<number>;
+}
+export interface BudgetLine extends Base {
+  revision_id: number; tender_id: number; sort: number; category: BudgetCategory; item_code: Nullable<string>;
+  description: string; unit: Nullable<string>; quantity: number; unit_cost: number; margin_pct: number;
+  department_id: Nullable<number>; notes: Nullable<string>; wbs_stage: Nullable<string>;
+}
+export interface MarginChange extends Base {
+  budget_line_id: Nullable<number>; revision_id: number; old_margin: Nullable<number>; new_margin: Nullable<number>;
+  reason: Nullable<string>; user_id: Nullable<number>;
+}
+export interface TenderReview extends Base {
+  tender_id: number; revision_id: Nullable<number>; department_id: Nullable<number>; reviewer_id: Nullable<number>;
+  decision: ReviewDecision; comment: Nullable<string>; decided_at: Nullable<string>;
+}
+export interface Negotiation extends Base {
+  tender_id: number; revision_id: Nullable<number>; date: Nullable<string>; channel: Nullable<NegotiationChannel>;
+  summary: Nullable<string>; client_position: Nullable<string>; our_position: Nullable<string>;
+  client_target_price: Nullable<number>; outcome: Nullable<string>; next_step: Nullable<string>;
+}
+export interface LossAnalysis extends Base {
+  tender_id: number; primary_reason: LossReason; secondary_reasons: Nullable<string>; winner_name: Nullable<string>;
+  winner_price: Nullable<number>; our_price: Nullable<number>; price_gap_pct: Nullable<number>;
+  technical_score: Nullable<number>; client_feedback: Nullable<string>; root_cause: Nullable<string>;
+  lessons_learned: Nullable<string>; action_items: Nullable<string>; owner_id: Nullable<number>; status: LossStatus;
+}
+export interface Project extends Base {
+  code: string; name: string; tender_id: Nullable<number>; client_id: Nullable<number>; parent_id: Nullable<number>;
+  category: Nullable<Category>; region: Nullable<string>; location: Nullable<string>;
+  contract_value: number; budget_cost: number; start_date: Nullable<string>; end_date: Nullable<string>;
+  status: ProjectStatus; manager_id: Nullable<number>; total_quantity: Nullable<number>;
+  quantity_unit: Nullable<QuantityUnit>; geometry: Nullable<string>; description: Nullable<string>;
+}
+export interface Stage extends Base {
+  project_id: number; code: Nullable<string>; name: string; description: Nullable<string>; sort: number;
+  geometry: Nullable<string>; planned_quantity: number; quantity_unit: Nullable<QuantityUnit>;
+  chainage_from: Nullable<number>; chainage_to: Nullable<number>;
+  planned_start: Nullable<string>; planned_end: Nullable<string>; actual_start: Nullable<string>; actual_end: Nullable<string>;
+  budget_amount: number; status: StageStatus; weight_pct: Nullable<number>;
+}
+export interface ProjectBudgetLine extends Base {
+  project_id: number; stage_id: Nullable<number>; category: BudgetCategory; description: Nullable<string>;
+  unit: Nullable<string>; quantity: number; unit_cost: number; budget_amount: number; source_budget_line_id: Nullable<number>;
+}
+export interface Subcontractor extends Base {
+  code: Nullable<string>; name: string; trade: Nullable<string>; categories: Nullable<string>;
+  contact_person: Nullable<string>; email: Nullable<string>; phone: Nullable<string>; address: Nullable<string>;
+  trade_license_no: Nullable<string>; trade_license_expiry: Nullable<string>; tax_no: Nullable<string>;
+  bank_name: Nullable<string>; iban: Nullable<string>; status: SubcontractorStatus; rating: Nullable<number>; notes: Nullable<string>;
+}
+export interface SubcontractorDocument extends Base {
+  subcontractor_id: number; doc_type: DocType; ref_no: Nullable<string>; issue_date: Nullable<string>;
+  expiry_date: Nullable<string>; attachment_id: Nullable<number>; status: DocStatus;
+}
+export interface OnboardingItem extends Base {
+  subcontractor_id: number; item: string; done: 0 | 1; done_by: Nullable<number>; done_at: Nullable<string>;
+}
+export interface Assignment extends Base {
+  code: Nullable<string>; project_id: number; stage_id: Nullable<number>; subcontractor_id: number;
+  scope: Nullable<string>; contract_value: number; quantity: Nullable<number>; quantity_unit: Nullable<QuantityUnit>;
+  unit_rate: Nullable<number>; start_date: Nullable<string>; end_date: Nullable<string>; payment_terms: Nullable<string>;
+  advance_pct: number; retention_pct: number; payment_days: number; status: AssignmentStatus;
+  portal_token: Nullable<string>; portal_enabled: 0 | 1;
+}
+export interface ProgressReport extends Base {
+  assignment_id: Nullable<number>; stage_id: Nullable<number>; project_id: number; report_date: string;
+  quantity_done: number; cumulative_quantity: number; percent_complete: number; manpower_count: number; man_hours: number;
+  equipment_used: Nullable<string>; work_done: Nullable<string>; issues: Nullable<string>;
+  delay_days: number; delay_cause: Nullable<string>; delay_responsibility: DelayResponsibility;
+  geometry: Nullable<string>; source: ProgressSource; status: ProgressStatus;
+  verified_by: Nullable<number>; verified_at: Nullable<string>;
+}
+export interface ProgressMaterial extends Base {
+  progress_report_id: number; material: string; unit: Nullable<string>; quantity: number; unit_cost: number;
+}
+export interface ProgressManpower extends Base {
+  progress_report_id: number; trade: string; headcount: number; hours: number;
+}
+export interface SubInvoice extends Base {
+  assignment_id: number; project_id: number; invoice_no: Nullable<string>; invoice_date: Nullable<string>;
+  period_from: Nullable<string>; period_to: Nullable<string>; claimed_amount: number; claimed_percent: number;
+  certified_amount: number; retention_amount: number; advance_recovery: number; net_payable: number;
+  status: InvoiceStatus; paid_amount: number; paid_date: Nullable<string>; source: ProgressSource; notes: Nullable<string>;
+}
+export interface CompletionCertificate extends Base {
+  assignment_id: number; project_id: number; stage_id: Nullable<number>; cert_type: CertType; cert_no: Nullable<string>;
+  cert_date: Nullable<string>; percent: Nullable<number>; quantity: Nullable<number>; remarks: Nullable<string>;
+  status: CertStatus; issued_by: Nullable<number>; source: ProgressSource;
+}
+export interface ProjectCost extends Base {
+  project_id: number; stage_id: Nullable<number>; category: string; description: Nullable<string>;
+  amount: number; cost_date: Nullable<string>; source_type: Nullable<string>; source_id: Nullable<number>;
+}
+export interface Issue extends Base {
+  project_id: number; stage_id: Nullable<number>; assignment_id: Nullable<number>; title: string;
+  description: Nullable<string>; responsibility: DelayResponsibility; impact_days: number; impact_cost: number;
+  status: IssueStatus; raised_on: Nullable<string>; resolved_on: Nullable<string>;
+}
