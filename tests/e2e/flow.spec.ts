@@ -16,8 +16,19 @@ const consoleProblems: string[] = [];
 let ctx: BrowserContext;
 let page: Page;
 
+let currentUser = 0;
+/** Sign in as a seeded user (id -> email from the DB; admin Admin@12345, others Password@123). */
 async function as(userId: number) {
-  await ctx.addCookies([{ name: "ops_user_id", value: String(userId), url: BASE }]);
+  if (currentUser === userId) return;
+  const email = one<{ email: string }>("select email from users where id=?", userId).email;
+  await ctx.clearCookies();
+  await page.goto("/login");
+  await page.locator("[name=email]").fill(email);
+  await page.locator("[name=password]").fill(userId === 1 ? "Admin@12345" : "Password@123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((u) => !u.pathname.startsWith("/login"));
+  await page.waitForLoadState("networkidle");
+  currentUser = userId;
 }
 async function go(url: string) {
   await page.goto(url);
