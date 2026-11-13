@@ -7,17 +7,18 @@ import { statusLabel } from "@/lib/status";
 import type { InvoiceStatus } from "@/lib/types";
 import { approveInvoice, certifyInvoice, payInvoice, rejectInvoice, startInvoiceReview } from "@/features/invoices/actions";
 import { invoiceTotals, listInvoices, type InvoiceQueueRow } from "@/features/invoices/queries";
-import { requirePage } from "@/lib/auth";
+import { canMap, requirePage } from "@/lib/auth";
 
 const STATUSES: InvoiceStatus[] = ["submitted", "under_review", "certified", "approved", "paid", "rejected"];
 
 function Hidden({ id }: { id: number }) { return <input type="hidden" name="id" value={id} />; }
 
-function Actions({ i }: { i: InvoiceQueueRow }) {
+type Can = { certify: boolean; approve: boolean; pay: boolean };
+function Actions({ i, c }: { i: InvoiceQueueRow; c: Can }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5">
-      {i.status === "submitted" && <form action={startInvoiceReview}><Hidden id={i.id} /><Button type="submit" size="sm">Start review</Button></form>}
-      {(i.status === "submitted" || i.status === "under_review") && (
+      {c.certify && i.status === "submitted" && <form action={startInvoiceReview}><Hidden id={i.id} /><Button type="submit" size="sm">Start review</Button></form>}
+      {c.certify && (i.status === "submitted" || i.status === "under_review") && (
         <ModalButton label="Certify" title={`Certify invoice ${i.invoice_no ?? i.id}`} size="sm" variant="primary">
           <form action={certifyInvoice} className="space-y-3">
             <Hidden id={i.id} />
@@ -27,8 +28,8 @@ function Actions({ i }: { i: InvoiceQueueRow }) {
           </form>
         </ModalButton>
       )}
-      {i.status === "certified" && <form action={approveInvoice}><Hidden id={i.id} /><Button type="submit" size="sm" variant="success">Approve</Button></form>}
-      {i.status === "approved" && (
+      {c.approve && i.status === "certified" && <form action={approveInvoice}><Hidden id={i.id} /><Button type="submit" size="sm" variant="success">Approve</Button></form>}
+      {c.pay && i.status === "approved" && (
         <ModalButton label="Mark paid" title={`Pay invoice ${i.invoice_no ?? i.id}`} size="sm" variant="success">
           <form action={payInvoice} className="space-y-3">
             <Hidden id={i.id} />
@@ -38,7 +39,7 @@ function Actions({ i }: { i: InvoiceQueueRow }) {
           </form>
         </ModalButton>
       )}
-      {i.status !== "paid" && i.status !== "rejected" && (
+      {(c.certify || c.approve) && i.status !== "paid" && i.status !== "rejected" && (
         <ModalButton label="Reject" title={`Reject invoice ${i.invoice_no ?? i.id}`} size="sm" variant="danger">
           <form action={rejectInvoice} className="space-y-3">
             <Hidden id={i.id} />
@@ -52,7 +53,8 @@ function Actions({ i }: { i: InvoiceQueueRow }) {
 }
 
 export default async function InvoicesPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
-  await requirePage("invoices");
+  const me = await requirePage("invoices");
+  const c = canMap(me, "invoices", ["certify", "approve", "pay"] as const);
   const { status } = await searchParams;
   const active = STATUSES.includes(status as InvoiceStatus) ? status : undefined;
   const totals = invoiceTotals();
@@ -97,7 +99,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                   <TD num>{i.advance_recovery ? formatMoney(i.advance_recovery) : "—"}</TD>
                   <TD num className="font-medium">{i.net_payable ? formatMoney(i.net_payable) : "—"}</TD>
                   <TD><StatusBadge kind="invoiceStatus" value={i.status} />{i.paid_date && <div className="text-xs text-slate-400">{formatDate(i.paid_date)}</div>}</TD>
-                  <TD><Actions i={i} /></TD>
+                  <TD><Actions i={i} c={c} /></TD>
                 </TR>
               ))}
             </TBody>

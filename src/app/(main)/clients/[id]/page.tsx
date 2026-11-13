@@ -11,10 +11,10 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { clientProjects, clientTenders, getClient } from "@/features/clients/queries";
 import { ClientForm } from "@/features/clients/ClientForm";
 import { deleteClient } from "@/features/clients/actions";
-import { requirePage } from "@/lib/auth";
+import { can, requirePage } from "@/lib/auth";
 
 export default async function ClientPage({ params }: { params: Promise<{ id: string }> }) {
-  await requirePage("clients");
+  const me = await requirePage("clients");
   const { id: s } = await params;
   const id = Number(s);
   const c = Number.isInteger(id) ? getClient(id) : undefined;
@@ -24,8 +24,8 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
     <>
       <PageHeader title={c.name} breadcrumbs={[{ label: "Clients", href: "/clients" }, { label: c.name }]} badges={<StatusBadge kind="clientType" value={c.type} />}
         actions={<>
-          <ModalButton label="Edit" title="Edit client" wide><ClientForm client={c} /></ModalButton>
-          <form action={deleteClient}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="danger">Delete</Button></form>
+          {can(me, "clients", "edit") && <ModalButton label="Edit" title="Edit client" wide><ClientForm client={c} /></ModalButton>}
+          {can(me, "clients", "delete") && <form action={deleteClient}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="danger">Delete</Button></form>}
         </>} />
       <CardSection title="Contact" className="mb-5">
         <dl className="grid gap-3 text-sm sm:grid-cols-4">

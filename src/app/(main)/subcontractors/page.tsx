@@ -3,12 +3,12 @@ import { AlertTriangle, Plus, Star } from "lucide-react";
 import { Badge, CardSection, EmptyState, Input, LinkButton, PageHeader, Select, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR, Button } from "@/components/ui";
 import { statusOptions } from "@/lib/status";
 import { listSubcontractors } from "@/features/subcontractors/queries";
-import { requirePage } from "@/lib/auth";
+import { can, requirePage } from "@/lib/auth";
 
 type SP = { status?: string; q?: string };
 
 export default async function SubcontractorsPage({ searchParams }: { searchParams: Promise<SP> }) {
-  await requirePage("subcontractors");
+  const me = await requirePage("subcontractors");
   const sp = await searchParams;
   const all = listSubcontractors();
   const q = (sp.q ?? "").toLowerCase();
@@ -18,7 +18,7 @@ export default async function SubcontractorsPage({ searchParams }: { searchParam
   return (
     <>
       <PageHeader title="Subcontractors" description="Directory, onboarding and performance of subcontractors."
-        actions={<LinkButton href="/subcontractors/new" variant="primary"><Plus size={15} />New subcontractor</LinkButton>} />
+        actions={can(me, "subcontractors", "create") ? <LinkButton href="/subcontractors/new" variant="primary"><Plus size={15} />New subcontractor</LinkButton> : undefined} />
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Subcontractors" value={all.length} />
         <Stat label="Approved" value={all.filter((s) => s.status === "approved").length} tone="good" />

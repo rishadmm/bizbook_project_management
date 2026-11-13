@@ -9,15 +9,15 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
 import { formatMoney } from "@/lib/format";
 import { listClients } from "@/features/clients/queries";
 import { ClientForm } from "@/features/clients/ClientForm";
-import { requirePage } from "@/lib/auth";
+import { can, requirePage } from "@/lib/auth";
 
 export default async function ClientsPage() {
-  await requirePage("clients");
+  const me = await requirePage("clients");
   const rows = listClients();
   return (
     <>
       <PageHeader title="Clients" description="Client master: authorities, utilities and private clients."
-        actions={<ModalButton label="New client" title="New client" variant="primary" icon={<Plus size={14} />} wide><ClientForm /></ModalButton>} />
+        actions={can(me, "clients", "create") ? <ModalButton label="New client" title="New client" variant="primary" icon={<Plus size={14} />} wide><ClientForm /></ModalButton> : undefined} />
       <CardSection flush>
         {rows.length === 0 ? <div className="p-4"><EmptyState title="No clients yet" /></div> : (
           <Table>
