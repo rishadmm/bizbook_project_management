@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Paperclip } from "lucide-react";
-import { Button, CardSection, EmptyState, Field, Input, LinkButton, ModalButton, PageHeader, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR, Textarea } from "@/components/ui";
+import { Button, CardSection, ClickRow, EmptyState, Field, Input, LinkButton, ModalButton, PageHeader, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR, Textarea } from "@/components/ui";
 import { cn } from "@/components/ui/cn";
 import { formatDate, formatMoney, todayISO } from "@/lib/format";
 import { statusLabel } from "@/lib/status";
@@ -89,11 +89,11 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             <THead><TR><TH>Invoice</TH><TH>Subcontractor / project</TH><TH>Date</TH><TH num>Claimed</TH><TH num>Certified</TH><TH num>Retention</TH><TH num>Advance rec.</TH><TH num>Net payable</TH><TH>Status</TH><TH>{""}</TH></TR></THead>
             <TBody>
               {rows.map((i) => (
-                <TR key={i.id}>
+                <ClickRow key={i.id} href={`/invoices/${i.id}`}>
                   <TD>
-                    <div className="font-medium text-slate-900">{i.invoice_no ?? `#${i.id}`}</div>
+                    <Link href={`/invoices/${i.id}`} className="font-medium text-primary-dark hover:underline">{i.invoice_no ?? `#${i.id}`}</Link>
                     <div className="text-xs text-slate-500">{i.assignment_code}{i.source === "portal" ? " · portal" : ""}</div>
-                    {i.files.map((f) => <a key={f.id} href={`/api/files/${f.id}`} target="_blank" className="mr-2 inline-flex items-center gap-0.5 text-xs text-blue-700 hover:underline"><Paperclip size={10} />{f.filename}</a>)}
+                    {i.files.length > 0 && <span className="inline-flex items-center gap-0.5 text-xs text-slate-500"><Paperclip size={10} />{i.files.length} file{i.files.length === 1 ? "" : "s"}</span>}
                   </TD>
                   <TD><Link href={`/subcontractors/${i.subcontractor_id}`} className="text-blue-700 hover:underline">{i.subcontractor_name}</Link>
                     <div className="text-xs"><Link href={`/projects/${i.project_id}`} className="text-slate-500 hover:text-blue-700">{i.project_code} · {i.project_name}</Link></div></TD>
@@ -105,7 +105,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                   <TD num className="font-medium">{i.net_payable ? formatMoney(i.net_payable) : "—"}</TD>
                   <TD><StatusBadge kind="invoiceStatus" value={i.status} />{i.paid_date && <div className="text-xs text-slate-400">{formatDate(i.paid_date)}</div>}</TD>
                   <TD><Actions i={i} c={c} me={me} /></TD>
-                </TR>
+                </ClickRow>
               ))}
             </TBody>
           </Table>

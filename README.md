@@ -3,7 +3,7 @@
 Single-company web app for an infrastructure contractor (road, cable, pipeline, telecom, civil). It follows work from bid to delivery:
 
 **Tender -> departmental preparation -> detailed budget (BOQ) with per-line margin -> internal review -> submission -> negotiation and revisions -> Won / Lost.**
-Lost tenders get a loss analysis. Won tenders become **projects** with map, stages, subcontract assignments, progress, invoices, completion certificates and budget/schedule control dashboards (EVM, delay attribution). Subcontractors report through a public, token-based **portal**. Sensitive steps run through a configurable **approval engine**, and access is controlled by **roles and permissions (RBAC)**.
+Lost tenders get a loss analysis. Won tenders become **projects** with map, stages, subcontract assignments, progress, invoices, completion certificates and budget/schedule control dashboards (EVM, delay attribution). Subcontractors work through a **login-based portal** per company (`/p/<slug>`: dashboard, project monitoring, progress updates, invoices, payments, issues/RFIs, documents, team) and the legacy token quick-update link (`/portal/<token>`). Sensitive steps run through a configurable **approval engine**, and access is controlled by **roles and permissions (RBAC)**.
 
 ## Modules
 
@@ -15,7 +15,7 @@ Lost tenders get a loss analysis. Won tenders become **projects** with map, stag
 | Clients | `/clients`, `/clients/[id]` | Client master with tender/project history |
 | Projects | `/projects`, `/projects/[id]`, `/projects/[id]/stages/[stageId]` | Cards/table/map views; tabs Overview, Map (draw/edit, split a route into stages, open in Live Ops Map), Stages, Sub-projects, Subcontracts (portal links), Progress (verify portal reports), Budget & Cost, Invoices & Certificates, Delays & Issues, Documents, Activity |
 | Live Ops Map | `/map` (`?project=<id>&segment=<key>&color=<mode>&date=YYYY-MM-DD`) | Full-screen operations map: projects rail, project drawer with line of balance and delay causes, colour-by (health, subcontractor, delay cause, cost, staleness), time slider with playback, plan-vs-actual comparison, shareable URL state |
-| Subcontractors & portal | `/subcontractors`, `/subcontractors/[id]`, `/portal/[token]` | Directory, onboarding checklist and approval, documents with expiry, assignments with performance, invoices, certificates. The public portal lets a subcontractor submit progress, invoices and completion-certificate requests via a private link |
+| Subcontractors & portal | `/subcontractors`, `/subcontractors/[id]` (tab `?tab=portal`), `/p/[slug]/…`, `/portal/[token]` | Directory, onboarding checklist and approval, documents with expiry, assignments with performance, invoices, certificates. The **Portal access** tab manages the company's portal URL, users, one-time credentials, login activity, change requests and a read-only "view as subcontractor". The legacy token portal (`/portal/[token]`) keeps working as a quick-update link |
 | Invoices | `/invoices` | Cross-project invoice queue: review, certify, approve, pay, reject |
 | Approvals | `/approvals`, `/admin/approval-workflows` | Multi-level approval engine: inbox, history, delegations, workflow designer with live preview, per-document-type rules (Settings > Approvals) |
 | Admin / RBAC | `/admin/users`, `/admin/roles`, `/admin/audit` | Users, roles and permission matrix, per-user overrides, lockout/unlock, audit log |
@@ -51,9 +51,23 @@ npm run seed      # wipes data/ops.db and uploads/ in place and loads UAE-style 
 npm run dev       # http://localhost:3100
 ```
 
-Other scripts: `npm run build`, `npm start` (port 3100), `npm run lint`, `npm run test:e2e`.
+Other scripts: `npm run build`, `npm start` (port 3100), `npm run lint`, `npm run check:demo`, `npm run test:e2e`.
 
 `npm run seed` also prints the subcontractor **portal links** (`http://localhost:3100/portal/<token>`) for active assignments; you can copy a link from a project's **Subcontracts** tab. New assignments start with the portal disabled.
+
+### Subcontractor portal (login per company)
+Every subcontractor has a portal address `http://localhost:3100/p/<slug>` (slug editable in **Subcontractors → Portal access**). Staff with `subcontractors/portal` create the portal users (temporary password shown once, copy / print) and can open a read-only admin view. Portal sessions are completely separate from internal sessions (`bbp_portal` cookie, `portal_*` tables, `lib/portal-auth.ts`): the subcontractor id always comes from the session, never from the URL; every query filters by it; foreign ids return 404 and foreign files 403. Specification: `PORTAL_SPEC.md`.
+
+Demo portal logins (after `npm run seed`; password **`Portal@123`** for every demo portal user; one user must change it at first sign-in, one is locked, one disabled; the seed prints the full list):
+
+| Company | Portal URL | Owner e-mail |
+|---|---|---|
+| Gulf Trench & Cable Works | `http://localhost:3100/p/gulf-trench` | `bilal.siddiqui@gulftrenchcabl-demo.ae` |
+| Desert Rock Earthworks | `http://localhost:3100/p/desert-rock` | `mohammed.faisal@desertrockeart-demo.ae` |
+| Emirates Asphalt & Paving | `http://localhost:3100/p/emirates-asphalt` | `ahmed.younis@emiratesasphal-demo.ae` |
+| Falcon Telecom Infrastructure | `http://localhost:3100/p/falcon-telecom` | `karim.haddad@falcontelecomi-demo.ae` |
+
+The sign-in page also shows the demo credentials as a hint in development. E2E: `tests/e2e/portal-auth.spec.ts` (credentials flow, company isolation, progress + invoice submission, lock-outs, read-only admin view).
 
 Existing databases upgrade in place on first start (`src/lib/migrate.ts`: auth columns, roles, approval workflows, one-time grant of Live Ops Map access to every role that can view projects).
 
@@ -70,6 +84,7 @@ Existing databases upgrade in place on first start (`src/lib/migrate.ts`: auth c
 
 - Type check and lint: `npx tsc --noEmit`, `npx eslint src tests`
 - Map calculations: `npx tsx src/features/ops-map/calc.check.ts`
+- Demo data coverage: `npm run seed && npm run check:demo` (`scripts/check-demo-coverage.ts`, rules in `DEMO_DATA_SPEC.md`) prints a coverage table (RAG mix, segment statuses, delay causes, CPI/staleness spread, every status value per table, approvals, dashboard widgets) and exits 1 on any gap
 - End to end (Playwright, Chromium): `tests/e2e/*.spec.ts` drive the real UI through the lifecycle (flow), authentication/RBAC (auth), approvals (approvals) and the Live Ops Map (map). They also fail on browser console errors or hydration warnings.
 
 The e2e tests **mutate data**, so run them against an isolated database and server instead of your dev data:

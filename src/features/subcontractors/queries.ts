@@ -19,6 +19,7 @@ export interface SubcontractorRow extends Subcontractor {
   total_assignments: number;
   expired_docs: number;
   expiring_docs: number;
+  portal_users: number;
 }
 
 export function listSubcontractors(): SubcontractorRow[] {
@@ -26,8 +27,9 @@ export function listSubcontractors(): SubcontractorRow[] {
   const subs = db.prepare(`
     SELECT s.*,
       (SELECT COUNT(*) FROM assignments a WHERE a.subcontractor_id = s.id AND a.status = 'active') AS active_assignments,
-      (SELECT COUNT(*) FROM assignments a WHERE a.subcontractor_id = s.id) AS total_assignments
-    FROM subcontractors s ORDER BY s.name`).all() as (Subcontractor & { active_assignments: number; total_assignments: number })[];
+      (SELECT COUNT(*) FROM assignments a WHERE a.subcontractor_id = s.id) AS total_assignments,
+      (SELECT COUNT(*) FROM portal_users u WHERE u.subcontractor_id = s.id AND u.status = 'active') AS portal_users
+    FROM subcontractors s ORDER BY s.name`).all() as (Subcontractor & { active_assignments: number; total_assignments: number; portal_users: number })[];
   const docs = db.prepare("SELECT subcontractor_id, expiry_date, status FROM subcontractor_documents WHERE expiry_date IS NOT NULL").all() as
     { subcontractor_id: number; expiry_date: string; status: string }[];
   return subs.map((s) => {

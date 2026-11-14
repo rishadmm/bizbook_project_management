@@ -34,7 +34,7 @@ export default async function SubcontractorsPage({ searchParams }: { searchParam
       <CardSection flush>
         {rows.length === 0 ? <EmptyState title="No subcontractors found" /> : (
           <Table>
-            <THead><TR><TH>Code</TH><TH>Name</TH><TH>Trade</TH><TH>Status</TH><TH num>Rating</TH><TH num>Active assignments</TH><TH>Documents</TH></TR></THead>
+            <THead><TR><TH>Code</TH><TH>Name</TH><TH>Trade</TH><TH>Status</TH><TH num>Rating</TH><TH num>Active assignments</TH><TH>Portal</TH><TH>Documents</TH></TR></THead>
             <TBody>
               {rows.map((s) => (
                 <TR key={s.id}>
@@ -44,6 +44,7 @@ export default async function SubcontractorsPage({ searchParams }: { searchParam
                   <TD><StatusBadge kind="subcontractorStatus" value={s.status} /></TD>
                   <TD num>{s.rating ? <span className="inline-flex items-center gap-1"><Star size={12} className="fill-amber-400 text-amber-400" />{s.rating.toFixed(1)}</span> : "—"}</TD>
                   <TD num>{s.active_assignments} <span className="text-slate-400">/ {s.total_assignments}</span></TD>
+                  <TD>{s.portal_enabled && s.portal_users > 0 ? <Badge tone="green">Active ({s.portal_users} user{s.portal_users === 1 ? "" : "s"})</Badge> : <Badge tone="slate">Off</Badge>}</TD>
                   <TD>
                     {s.expired_docs > 0 && <Badge tone="red"><AlertTriangle size={11} className="mr-1" />{s.expired_docs} expired</Badge>}
                     {s.expiring_docs > 0 && <Badge tone="amber" className="ml-1">{s.expiring_docs} expiring</Badge>}

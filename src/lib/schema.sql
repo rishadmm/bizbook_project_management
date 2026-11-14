@@ -235,8 +235,25 @@ CREATE TABLE IF NOT EXISTS sub_invoices (
   retention_amount REAL DEFAULT 0, advance_recovery REAL DEFAULT 0, net_payable REAL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'submitted', paid_amount REAL DEFAULT 0, paid_date TEXT,
   source TEXT NOT NULL DEFAULT 'internal', notes TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  -- invoice document (INVOICE_SPEC): claimed_amount = gross incl. VAT = subtotal + vat_amount
+  sub_invoice_ref TEXT, currency TEXT NOT NULL DEFAULT 'AED', vat_rate REAL NOT NULL DEFAULT 5,
+  subtotal REAL DEFAULT 0, vat_amount REAL DEFAULT 0, gross_amount REAL DEFAULT 0,
+  retention_percent REAL DEFAULT 0, advance_recovery_percent REAL DEFAULT 0, previous_certified REAL DEFAULT 0,
+  submitted_by_name TEXT, submitted_by_email TEXT, submitted_at TEXT, due_date TEXT,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL, certified_by INTEGER REFERENCES users(id) ON DELETE SET NULL, certified_at TEXT,
+  payment_ref TEXT, payment_method TEXT,
+  erp_doc_no TEXT, erp_sync_status TEXT NOT NULL DEFAULT 'not_synced', erp_synced_at TEXT, erp_error TEXT
 );
+CREATE TABLE IF NOT EXISTS sub_invoice_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id INTEGER NOT NULL REFERENCES sub_invoices(id) ON DELETE CASCADE,
+  line_no INTEGER NOT NULL DEFAULT 1, item_code TEXT, description TEXT NOT NULL, unit TEXT,
+  contract_qty REAL DEFAULT 0, rate REAL DEFAULT 0, prev_qty REAL DEFAULT 0, this_qty REAL DEFAULT 0, cum_qty REAL DEFAULT 0,
+  amount REAL DEFAULT 0, certified_qty REAL DEFAULT 0, certified_amount REAL DEFAULT 0, remarks TEXT,
+  stage_id INTEGER REFERENCES stages(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invline_invoice ON sub_invoice_lines(invoice_id);
 CREATE TABLE IF NOT EXISTS completion_certificates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
@@ -383,3 +400,43 @@ CREATE TABLE IF NOT EXISTS project_cost_requests (
   status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_pcr_project ON project_cost_requests(project_id);
+
+-- ---------------------------------------------------------------- subcontractor portal (PORTAL_SPEC): users, sessions, audit, issue threads, change requests
+CREATE TABLE IF NOT EXISTS portal_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, job_title TEXT,
+  portal_role TEXT NOT NULL DEFAULT 'viewer',
+  password_hash TEXT, status TEXT NOT NULL DEFAULT 'active',
+  must_change_password INTEGER NOT NULL DEFAULT 0, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until TEXT,
+  last_login_at TEXT, previous_login_at TEXT, password_changed_at TEXT,
+  assignment_scope TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_by_portal_user INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_users_email ON portal_users(subcontractor_id, lower(email));
+CREATE TABLE IF NOT EXISTS portal_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE,
+  portal_user_id INTEGER REFERENCES portal_users(id) ON DELETE CASCADE,
+  subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  impersonated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen_at TEXT, ip TEXT, user_agent TEXT, revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS portal_auth_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER, portal_user_id INTEGER, email TEXT, event TEXT NOT NULL,
+  ip TEXT, user_agent TEXT, detail TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pae_sub ON portal_auth_events(subcontractor_id, id);
+CREATE TABLE IF NOT EXISTS issue_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  author_type TEXT NOT NULL, author_id INTEGER, author_name TEXT NOT NULL, body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ic_issue ON issue_comments(issue_id);
+CREATE TABLE IF NOT EXISTS portal_change_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  requested_by INTEGER, requested_by_name TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL, reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', decided_by INTEGER, decided_at TEXT, decision_note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pcr2_sub ON portal_change_requests(subcontractor_id, status);

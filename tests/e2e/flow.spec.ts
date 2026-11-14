@@ -63,6 +63,7 @@ test.describe.serial("tender-to-project flow", () => {
   let subId = 0;
   let token = "";
   let assignmentId = 0;
+  let invNo = ""; // our invoice number of the portal invoice (the sub's own ref is QA-INV-1)
 
   test.beforeAll(async ({ browser }) => {
     ctx = await browser.newContext({ baseURL: BASE, viewport: { width: 1440, height: 900 } });
@@ -343,11 +344,14 @@ test.describe.serial("tender-to-project flow", () => {
     const r = one<{ source: string; status: string; quantity_done: number }>("select source,status,quantity_done from progress_reports where assignment_id=?", assignmentId);
     expect(r).toMatchObject({ source: "portal", status: "submitted", quantity_done: 40 });
     // invoice
-    await portal.locator("[name=invoice_no]").fill("QA-INV-1");
-    await portal.locator("[name=claimed_amount]").fill("20000");
+    await portal.locator("[name=sub_invoice_ref]").fill("QA-INV-1");
+    await portal.locator("[name=line_this_qty]").first().fill("5");
+    await portal.locator("[name=att_file]").first().setInputFiles({ name: "qa-tax-invoice.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 qa tax invoice") });
     await portal.getByRole("button", { name: "Submit invoice" }).click();
     await portal.waitForLoadState("networkidle"); await portal.waitForTimeout(800);
     expect(one<{ status: string; source: string }>("select status,source from sub_invoices where assignment_id=?", assignmentId)).toMatchObject({ status: "submitted", source: "portal" });
+    invNo = one<{ invoice_no: string }>("select invoice_no from sub_invoices where assignment_id=?", assignmentId).invoice_no;
+    expect(invNo).toBeTruthy();
     // certificate
     await portal.locator("[name=percent]").fill("40");
     await portal.getByRole("button", { name: "Request certificate" }).click();
@@ -375,12 +379,12 @@ test.describe.serial("tender-to-project flow", () => {
 
   test("invoice certify -> approve -> pay; issue certificate", async () => {
     await go(`/invoices`);
-    const row = page.locator("tr", { hasText: "QA-INV-1" });
+    const row = page.locator("tr", { hasText: invNo });
     await expect(row).toBeVisible();
     await row.getByRole("button", { name: /Start review/i }).click().catch(() => {});
     await settle();
     await go(`/invoices`);
-    await clickBtn("Certify", page.locator("tr", { hasText: "QA-INV-1" }));
+    await clickBtn("Certify", page.locator("tr", { hasText: invNo }));
     await modal().locator("[name=certified_amount]").fill("18000");
     await modal().getByRole("button", { name: "Certify" }).click();
     await settle();
@@ -392,18 +396,18 @@ test.describe.serial("tender-to-project flow", () => {
     const invId = one<{ id: number }>("select id from sub_invoices where assignment_id=?", assignmentId).id;
     const pm = one<{ manager_id: number }>("select manager_id from projects where id=?", projectId).manager_id;
     expect(pendingTasks("sub_invoice", invId).map((t) => t.assignee_user_id)).toEqual([pm]);
-    await approveInInbox(pm, "QA-INV-1");
-    await approveInInbox(5, "QA-INV-1");
+    await approveInInbox(pm, invNo);
+    await approveInInbox(5, invNo);
     await as(1);
     expect(one<{ status: string }>("select status from sub_invoices where assignment_id=?", assignmentId).status).toBe("approved");
     // auto-posted cost
     expect(one<{ c: number }>("select count(*) c from project_costs where project_id=? and source_type='sub_invoice'", projectId).c).toBe(1);
     await go(`/invoices`);
-    await clickBtn("Mark paid", page.locator("tr", { hasText: "QA-INV-1" }));
+    await clickBtn("Mark paid", page.locator("tr", { hasText: invNo }));
     await modal().getByRole("button", { name: "Record payment" }).click();
     await settle();
     expect(one<{ status: string }>("select status from sub_invoices where assignment_id=?", assignmentId).status).toBe("approved"); // payment awaits approval
-    await approveInInbox(5, "QA-INV-1"); // invoice_payment: finance role (L2 management only from 1M)
+    await approveInInbox(5, invNo); // invoice_payment: finance role (L2 management only from 1M)
     await as(1);
     inv = one("select status,certified_amount,retention_amount,net_payable from sub_invoices where assignment_id=?", assignmentId);
     expect(inv.status).toBe("paid");

@@ -8,10 +8,12 @@
     "start": "next start -p 3100",
     "lint": "eslint",
     "seed": "tsx src/lib/seed.ts",
+    "check:demo": "tsx scripts/check-demo-coverage.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@geoman-io/leaflet-geoman-free": "^2.20.6",
+    "@react-pdf/renderer": "^4.9.0",
     "@turf/turf": "^7.4.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.1.1",

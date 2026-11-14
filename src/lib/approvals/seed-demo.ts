@@ -96,6 +96,9 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
     if (t.status === "under_review") seedRequest(db, "tender_submission", t.id, { requestedBy: t.owner_id, hoursAgo: 20, outcome: "pending", atLevel: 1, note: "All department sections completed." });
     else if (["approved", "submitted", "negotiation", "won", "lost"].includes(t.status)) seedRequest(db, "tender_submission", t.id, { requestedBy: t.owner_id, hoursAgo: 24 * 40, outcome: "approved" });
     if (t.status === "won") seedRequest(db, "tender_award", t.id, { requestedBy: u.omar, hoursAgo: 24 * 25, outcome: "approved", payload: { won_value: t.won_value } });
+    // awards of 20M and above wait for the general manager (level 2)
+    // (only the negotiation tender: a pending award hides Mark Won / Mark Lost, and the e2e flow marks the newest open tender lost)
+    if (t.status === "negotiation") seedRequest(db, "tender_award", t.id, { requestedBy: u.rahul, hoursAgo: t.status === "negotiation" ? 70 : 30, outcome: "pending", atLevel: 2, note: "Client confirmed intent to award; GM sign-off needed (value above 20M)." });
     if (["negotiation", "won", "lost"].includes(t.status)) {
       const rev = db.prepare("SELECT id FROM tender_revisions WHERE tender_id = ? AND rev_no = 1 AND status IN ('submitted','final','superseded')").get(t.id) as { id: number } | undefined;
       if (rev) seedRequest(db, "tender_revision", rev.id, { requestedBy: t.owner_id, hoursAgo: 24 * 18, outcome: "approved" });
@@ -123,7 +126,7 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
   // ---- assignments
   let n = 0;
   for (const a of all("SELECT id, project_id, status FROM assignments ORDER BY id")) {
-    if (a.status === "draft") seedRequest(db, "subcontract_award", a.id, { requestedBy: u.omar, hoursAgo: n++ % 2 === 0 ? 3 : 90, outcome: "pending", atLevel: 1, note: "Awaiting award sign-off." });
+    if (a.status === "draft") seedRequest(db, "subcontract_award", a.id, { requestedBy: pm(a.project_id) === u.omar ? u.layla : u.omar, hoursAgo: n++ % 2 === 0 ? 3 : 90, outcome: "pending", atLevel: 1, note: "Awaiting award sign-off." });
     else if (n < 9 && ["active", "completed"].includes(a.status)) { seedRequest(db, "subcontract_award", a.id, { requestedBy: pm(a.project_id) === u.layla ? u.omar : u.layla, hoursAgo: 24 * 90, outcome: "approved" }); n++; }
   }
 
@@ -137,7 +140,7 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
       seedRequest(db, "sub_invoice", i.id, { requestedBy: by, hoursAgo: slow ? 24 * 6 : k % 2 ? 30 : 8, outcome: "pending", atLevel: k % 4 === 0 ? 2 : 1 });
     } else if (i.status === "approved") {
       seedRequest(db, "sub_invoice", i.id, { requestedBy: by, hoursAgo: 24 * 30, outcome: "approved" });
-      if (payPending < 3 && seedRequest(db, "invoice_payment", i.id, { requestedBy: by, hoursAgo: 52, outcome: "pending", atLevel: 1 })) payPending++;
+      if (payPending < 6 && seedRequest(db, "invoice_payment", i.id, { requestedBy: by, hoursAgo: 52, outcome: "pending", atLevel: 1 })) payPending++;
     } else if (i.status === "paid") {
       seedRequest(db, "sub_invoice", i.id, { requestedBy: by, hoursAgo: 24 * 60, outcome: "approved" });
       if (payDone < 8 && seedRequest(db, "invoice_payment", i.id, { requestedBy: by, hoursAgo: 24 * 45, outcome: "approved" })) payDone++;
@@ -157,10 +160,11 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
   }
 
   // ---- manual costs above the threshold (pending)
-  const projects = all("SELECT id FROM projects WHERE status IN ('active','mobilizing') ORDER BY id LIMIT 2");
+  const open = all("SELECT id FROM projects WHERE status IN ('active','mobilizing') ORDER BY id");
+  const projects = [open[0], open.find((p) => pm(p.id) === u.omar) ?? open[1]];
   projects.forEach((p, idx) => {
     const rid = Number(db.prepare("INSERT INTO project_cost_requests(project_id, category, description, amount, cost_date, created_by, status) VALUES (?,?,?,?,?,?, 'pending')")
-      .run(p.id, idx === 0 ? "equipment" : "overhead", idx === 0 ? "Emergency crane hire for bridge girder lift" : "Site establishment extension (temporary offices)", idx === 0 ? 86_000 : 64_500, today, u.omar).lastInsertRowid);
-    seedRequest(db, "project_cost", rid, { requestedBy: u.omar, hoursAgo: idx === 0 ? 70 : 5, outcome: "pending", atLevel: idx === 0 ? 2 : 1 });
+      .run(p.id, idx === 0 ? "equipment" : "overhead", idx === 0 ? "Emergency crane hire for bridge girder lift" : "Site establishment extension (temporary offices)", idx === 0 ? 86_000 : 64_500, today, pm(p.id) === u.omar ? u.layla : u.omar).lastInsertRowid);
+    seedRequest(db, "project_cost", rid, { requestedBy: pm(p.id) === u.omar ? u.layla : u.omar, hoursAgo: idx === 0 ? 70 : 5, outcome: "pending", atLevel: idx === 0 ? 2 : 1 });
   });
 }

@@ -52,7 +52,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
   { code: "hr", name: "HR", description: "Human resources.", perms: { ...EVERYONE, ...view("projects", "ops_map", "users") } },
   {
     code: "procurement", name: "Procurement", description: "Subcontractor onboarding and procurement.",
-    perms: { ...EVERYONE, ...view("projects", "ops_map", "invoices", "clients"), subcontractors: ["view", "create", "edit", "approve"] },
+    perms: { ...EVERYONE, ...view("projects", "ops_map", "invoices", "clients"), subcontractors: ["view", "create", "edit", "approve", "portal"] },
   },
   {
     code: "viewer", name: "Viewer", description: "Read-only access.",

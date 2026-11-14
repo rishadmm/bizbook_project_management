@@ -9,6 +9,7 @@ import { DEFAULT_ONBOARDING_ITEMS, ENUMS } from "@/lib/status";
 import { requirePermission } from "@/lib/auth";
 import { hasOpenRequest, submitForApproval } from "@/lib/approvals/engine";
 import { guard, type ActionResult as FormResult } from "@/lib/action-result";
+import { ensureSlug } from "@/lib/portal-core";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const opt = (f: FormData, k: string) => str(f, k) || null;
@@ -43,6 +44,7 @@ export async function createSubcontractor(form: FormData): Promise<FormResult> {
       const sid = Number(r.lastInsertRowid);
       const ins = db.prepare("INSERT INTO onboarding_checklist(subcontractor_id, item, done) VALUES (?,?,0)");
       for (const item of DEFAULT_ONBOARDING_ITEMS) ins.run(sid, item);
+      ensureSlug(db, sid);
       return sid;
     })();
     await logActivity("subcontractor", id, "created", `Subcontractor ${f.name} created (onboarding started)`);

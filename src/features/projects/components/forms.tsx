@@ -2,8 +2,10 @@ import { Button } from "@/components/ui/Button";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { statusOptions } from "@/lib/status";
 import type { Assignment, Stage } from "@/lib/types";
-import { saveAssignment, saveIssue, saveStage, addManualCost, createSubProject, createInvoice, saveCertificate } from "../actions";
+import { saveAssignment, saveIssue, saveStage, addManualCost, createSubProject, saveCertificate } from "../actions";
 import type { IssueRow } from "../queries";
+import RecordInvoiceForm from "@/features/invoices/components/RecordInvoiceForm";
+import type { BoqItem } from "@/features/invoices/calc";
 
 type Opt = { value: string | number; label: string };
 const units = [{ value: "km", label: "km" }, { value: "m", label: "m" }, { value: "sqm", label: "sqm" }, { value: "nos", label: "nos" }, { value: "lumpsum", label: "lump sum" }];
@@ -132,23 +134,8 @@ export function SubProjectForm({ parentId, users, unit, today }: { parentId: num
   );
 }
 
-export function InvoiceForm({ projectId, assignments, today }: { projectId: number; assignments: Opt[]; today: string }) {
-  return (
-    <form action={createInvoice} className="space-y-3">
-      <input type="hidden" name="project_id" value={projectId} />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Subcontract"><Select name="assignment_id" required options={assignments} placeholder="Select…" /></Field>
-        <Field label="Invoice no." hint="Blank = auto"><Input name="invoice_no" /></Field>
-        <Field label="Invoice date"><Input name="invoice_date" type="date" defaultValue={today} /></Field>
-        <Field label="Claimed amount"><Input name="claimed_amount" type="number" step="any" min="0" required /></Field>
-        <Field label="Period from"><Input name="period_from" type="date" /></Field>
-        <Field label="Period to"><Input name="period_to" type="date" /></Field>
-      </div>
-      <Field label="Notes"><Textarea name="notes" rows={2} /></Field>
-      <Field label="Invoice file"><input type="file" name="files" multiple className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm" /></Field>
-      {submit("Record invoice")}
-    </form>
-  );
+export function InvoiceForm({ projectId, assignments, today, boq }: { projectId: number; assignments: Opt[]; today: string; boq: Record<number, BoqItem[]> }) {
+  return <RecordInvoiceForm projectId={projectId} assignments={assignments.map((a) => ({ value: Number(a.value), label: a.label }))} today={today} boq={boq} />;
 }
 
 export function CertificateForm({ projectId, assignments, today }: { projectId: number; assignments: Opt[]; today: string }) {

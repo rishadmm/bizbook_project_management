@@ -8,6 +8,7 @@ import { ActivityTimeline } from "@/components/ActivityTimeline";
 import { formatDate, formatDateTime, formatMoney, formatRatio, formatNumber, pct } from "@/lib/format";
 import { getAssignmentProgress, getSubcontractorPerformance } from "@/lib/metrics";
 import { statusOptions, statusLabel } from "@/lib/status";
+import { rejectPortalDocument } from "@/features/portal-admin/actions";
 import {
   approveSubcontractor, deleteDocument, setSubcontractorStatus, toggleChecklistItem, updateSubcontractor, verifyDocument,
 } from "@/features/subcontractors/actions";
@@ -16,7 +17,9 @@ import {
 } from "@/features/subcontractors/queries";
 import { ProfileForm } from "@/features/subcontractors/components/ProfileForm";
 import { DocumentForm } from "@/features/subcontractors/components/DocumentForm";
-import { can, requirePage } from "@/lib/auth";
+import { can, isAdminUser, requirePage } from "@/lib/auth";
+import PortalAccessTab from "@/features/portal-admin/components/PortalAccessTab";
+import { pendingDocumentCount } from "@/features/portal-admin/queries";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 import { hasOpenRequest } from "@/lib/approvals/engine";
 
@@ -38,6 +41,7 @@ export default async function SubcontractorPage({ params, searchParams }: { para
     { key: "assignments", label: "Assignments", count: assignments.length },
     { key: "invoices", label: "Invoices", count: invoices.length },
     { key: "certificates", label: "Certificates", count: certs.length },
+    ...(can(me, "subcontractors", "portal") ? [{ key: "portal", label: "Portal access", count: pendingDocumentCount(id) || undefined }] : []),
     { key: "activity", label: "Activity" },
   ];
   const tab = resolveTab(await searchParams, tabs);
@@ -114,7 +118,7 @@ export default async function SubcontractorPage({ params, searchParams }: { para
                   const w = docWarning(d.expiry_date, d.status);
                   return (
                     <TR key={d.id}>
-                      <TD>{statusLabel("docType", d.doc_type)}</TD>
+                      <TD>{statusLabel("docType", d.doc_type)}{d.source === "portal" && <Badge tone="violet" className="ml-1.5">Portal</Badge>}{d.uploaded_by_name && <div className="text-[11px] text-slate-400">by {d.uploaded_by_name}</div>}</TD>
                       <TD>{d.ref_no ?? "—"}</TD>
                       <TD>{formatDate(d.issue_date)}</TD>
                       <TD>{formatDate(d.expiry_date)} {w === "expired" && <Badge tone="red">expired</Badge>}{w === "expiring" && <Badge tone="amber">expiring</Badge>}</TD>
@@ -124,6 +128,10 @@ export default async function SubcontractorPage({ params, searchParams }: { para
                         <div className="flex items-center justify-end gap-1">
                           {d.status !== "verified" && (
                             <form action={verifyDocument}><input type="hidden" name="id" value={d.id} /><input type="hidden" name="subcontractor_id" value={id} /><Button type="submit" size="sm" variant="success">Verify</Button></form>
+                          )}
+                          {d.status === "pending_review" && (
+                            <form action={rejectPortalDocument} className="flex items-center gap-1"><input type="hidden" name="id" value={d.id} /><input type="hidden" name="subcontractor_id" value={id} />
+                              <input name="note" placeholder="Reason" aria-label="Rejection reason" className="w-24 rounded-lg border border-line px-2 py-1 text-xs" /><Button type="submit" size="sm" variant="danger">Reject</Button></form>
                           )}
                           <ModalButton label="" icon={<Pencil size={13} />} title="Edit document" size="sm" variant="ghost" wide><DocumentForm subcontractorId={id} doc={d} /></ModalButton>
                           <form action={deleteDocument}><input type="hidden" name="id" value={d.id} /><input type="hidden" name="subcontractor_id" value={id} /><Button type="submit" size="sm" variant="ghost" title="Delete"><Trash2 size={13} /></Button></form>
@@ -201,6 +209,10 @@ export default async function SubcontractorPage({ params, searchParams }: { para
             </Table>
           )}
         </CardSection>
+      )}
+
+      {tab === "portal" && (
+        <PortalAccessTab sub={sub} canManage={can(me, "subcontractors", "portal")} canViewAs={isAdminUser(me)} />
       )}
 
       {tab === "activity" && <ActivityTimeline entityType="subcontractor" entityId={id} />}

@@ -10,3 +10,4 @@ export * from "./Field";
 export * from "./EmptyState";
 export * from "./ProgressBar";
 export * from "./PageHeader";
+export * from "./ClickRow";

@@ -85,7 +85,7 @@ export const ENUMS = {
     hse_certificate: e("HSE certificate", "emerald"), bank_letter: e("Bank letter", "slate"), company_profile: e("Company profile", "slate"),
     iso: e("ISO", "violet"), other: e("Other", "slate"),
   },
-  docStatus: { pending: e("Pending", "amber"), verified: e("Verified", "green"), expired: e("Expired", "red"), rejected: e("Rejected", "rose") },
+  docStatus: { pending: e("Pending", "amber"), pending_review: e("Pending review", "violet"), verified: e("Verified", "green"), expired: e("Expired", "red"), rejected: e("Rejected", "rose") },
   assignmentStatus: {
     draft: e("Draft", "slate"), active: e("Active", "green"), suspended: e("Suspended", "amber"),
     completed: e("Completed", "blue"), terminated: e("Terminated", "red"),
@@ -141,6 +141,7 @@ export const ATTACHMENT_CATEGORIES: Record<string, string[]> = {
   assignment: ["Contract", "Variation", "Correspondence", "Other"],
   progress: ["Photos", "Report", "Other"],
   invoice: ["Invoice", "Backup", "Other"],
+  sub_invoice: ["tax_invoice", "measurement_sheet", "progress_photos", "timesheet", "delivery_note", "other"],
   certificate: ["Certificate", "Backup", "Other"],
   loss: ["Feedback", "Competitor info", "Other"],
   revision: ["Submission", "Other"],
@@ -163,3 +164,9 @@ export function statusOptions(kind: EnumKind): { value: string; label: string }[
   return Object.entries(ENUMS[kind] as EnumMap).map(([value, d]) => ({ value, label: d.label }));
 }
 export const RAG_HEX = { green: "#22c55e", amber: "#f59e0b", red: "#ef4444", grey: "#94a3b8" } as const;
+
+/** Attachment categories of a subcontractor invoice (entity_type `sub_invoice`) with display labels. */
+export const INVOICE_ATTACHMENT_CATEGORIES: { value: string; label: string }[] = [
+  { value: "tax_invoice", label: "Tax invoice copy" }, { value: "measurement_sheet", label: "Measurement sheet" }, { value: "progress_photos", label: "Progress photos" },
+  { value: "timesheet", label: "Timesheet" }, { value: "delivery_note", label: "Delivery note" }, { value: "other", label: "Other" },
+];

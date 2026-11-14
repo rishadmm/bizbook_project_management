@@ -6,7 +6,7 @@ export type Role = string;
 export type ClientType = "government" | "road_authority" | "telecom" | "utility" | "private" | "other";
 export type EntityType =
   | "tender" | "revision" | "project" | "stage" | "subcontractor" | "assignment"
-  | "progress" | "invoice" | "certificate" | "loss";
+  | "progress" | "invoice" | "sub_invoice" | "certificate" | "loss" | "issue";
 export type TenderKind = "tender" | "proposal" | "rfq" | "eoi";
 export type Category = "road" | "cable" | "pipeline" | "telecom" | "civil" | "other";
 export type QuantityUnit = "km" | "m" | "sqm" | "nos" | "lumpsum";
@@ -24,7 +24,7 @@ export type ProjectStatus = "planning" | "mobilizing" | "active" | "on_hold" | "
 export type StageStatus = "not_started" | "in_progress" | "delayed" | "on_hold" | "completed";
 export type SubcontractorStatus = "prospect" | "onboarding" | "approved" | "suspended" | "blacklisted";
 export type DocType = "trade_license" | "tax_certificate" | "insurance" | "hse_certificate" | "bank_letter" | "company_profile" | "iso" | "other";
-export type DocStatus = "pending" | "verified" | "expired" | "rejected";
+export type DocStatus = "pending" | "pending_review" | "verified" | "expired" | "rejected";
 export type AssignmentStatus = "draft" | "active" | "suspended" | "completed" | "terminated";
 export type DelayResponsibility = "none" | "subcontractor" | "company" | "client" | "authority" | "weather" | "utility_clash" | "other";
 export type ProgressSource = "internal" | "portal";
@@ -121,10 +121,12 @@ export interface Subcontractor extends Base {
   contact_person: Nullable<string>; email: Nullable<string>; phone: Nullable<string>; address: Nullable<string>;
   trade_license_no: Nullable<string>; trade_license_expiry: Nullable<string>; tax_no: Nullable<string>;
   bank_name: Nullable<string>; iban: Nullable<string>; status: SubcontractorStatus; rating: Nullable<number>; notes: Nullable<string>;
+  portal_slug: Nullable<string>; portal_enabled: 0 | 1;
 }
 export interface SubcontractorDocument extends Base {
   subcontractor_id: number; doc_type: DocType; ref_no: Nullable<string>; issue_date: Nullable<string>;
   expiry_date: Nullable<string>; attachment_id: Nullable<number>; status: DocStatus;
+  source?: string; uploaded_by_name?: Nullable<string>; review_note?: Nullable<string>;
 }
 export interface OnboardingItem extends Base {
   subcontractor_id: number; item: string; done: 0 | 1; done_by: Nullable<number>; done_at: Nullable<string>;
@@ -143,6 +145,7 @@ export interface ProgressReport extends Base {
   delay_days: number; delay_cause: Nullable<string>; delay_responsibility: DelayResponsibility;
   geometry: Nullable<string>; source: ProgressSource; status: ProgressStatus;
   verified_by: Nullable<number>; verified_at: Nullable<string>;
+  submitted_by_name?: Nullable<string>; portal_user_id?: Nullable<number>; reject_reason?: Nullable<string>; weather?: Nullable<string>;
 }
 export interface ProgressMaterial extends Base {
   progress_report_id: number; material: string; unit: Nullable<string>; quantity: number; unit_cost: number;
@@ -155,6 +158,17 @@ export interface SubInvoice extends Base {
   period_from: Nullable<string>; period_to: Nullable<string>; claimed_amount: number; claimed_percent: number;
   certified_amount: number; retention_amount: number; advance_recovery: number; net_payable: number;
   status: InvoiceStatus; paid_amount: number; paid_date: Nullable<string>; source: ProgressSource; notes: Nullable<string>;
+  sub_invoice_ref: Nullable<string>; currency: string; vat_rate: number; subtotal: number; vat_amount: number; gross_amount: number;
+  retention_percent: number; advance_recovery_percent: number; previous_certified: number;
+  submitted_by_name: Nullable<string>; submitted_by_email: Nullable<string>; submitted_at: Nullable<string>; due_date: Nullable<string>;
+  reviewed_by: Nullable<number>; certified_by: Nullable<number>; certified_at: Nullable<string>; payment_ref: Nullable<string>; payment_method: Nullable<string>;
+  erp_doc_no: Nullable<string>; erp_sync_status: ErpSyncStatus; erp_synced_at: Nullable<string>; erp_error: Nullable<string>;
+}
+export type ErpSyncStatus = "not_synced" | "queued" | "synced" | "failed";
+export interface SubInvoiceLine {
+  id: number; invoice_id: number; line_no: number; item_code: Nullable<string>; description: string; unit: Nullable<string>;
+  contract_qty: number; rate: number; prev_qty: number; this_qty: number; cum_qty: number; amount: number;
+  certified_qty: number; certified_amount: number; remarks: Nullable<string>; stage_id: Nullable<number>;
 }
 export interface CompletionCertificate extends Base {
   assignment_id: number; project_id: number; stage_id: Nullable<number>; cert_type: CertType; cert_no: Nullable<string>;
@@ -169,6 +183,7 @@ export interface Issue extends Base {
   project_id: number; stage_id: Nullable<number>; assignment_id: Nullable<number>; title: string;
   description: Nullable<string>; responsibility: DelayResponsibility; impact_days: number; impact_cost: number;
   status: IssueStatus; raised_on: Nullable<string>; resolved_on: Nullable<string>;
+  source?: string; kind?: string; category?: Nullable<string>; raised_by_name?: Nullable<string>; raised_by_portal_user?: Nullable<number>; awaiting_party?: Nullable<string>; last_activity_at?: Nullable<string>;
 }
 
 /* ------------------------------------------------------------------ approvals (AUTH_SPEC section D) */

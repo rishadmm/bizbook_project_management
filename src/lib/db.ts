@@ -6,7 +6,7 @@ import { migrate } from "./migrate";
 export type DB = Database.Database;
 
 /** Bump when schema/migrations change so a hot-reloaded dev server re-runs them. */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 6;
 const g = globalThis as unknown as { __opsDb?: DB; __opsDbV?: number };
 
 /** DB file path (override with OPS_DB_PATH). */
@@ -31,6 +31,8 @@ export function getDb(): DB {
   ins.run("company_name", "Al Noor Infrastructure LLC");
   ins.run("currency", "AED");
   ins.run("approval_cost_threshold", "50000");
+  ins.run("company_address", "Office 1204, Al Moosa Tower 2, Sheikh Zayed Road, Dubai, United Arab Emirates");
+  ins.run("company_trn", "100234567800003");
   g.__opsDb = db;
   g.__opsDbV = SCHEMA_VERSION;
   publishCurrency(db);

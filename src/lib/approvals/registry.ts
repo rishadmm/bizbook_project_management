@@ -133,7 +133,7 @@ export const REGISTRY: Record<ApprovalDocType, RegistryEntry> = {
     type: "sub_invoice", label: "Subcontractor invoice", module: "invoices", submitPermission: ["invoices", "approve"],
     getDocument(id) {
       const i = invoice(id); if (!i) return null;
-      return { ref: invLabel(i), title: `Invoice ${invLabel(i)} - ${i.subcontractor}`, amount: i.certified_amount, departmentId: null, projectId: i.project_id, url: `/projects/${i.project_id}?tab=invoices`, entity: ["invoice", id] };
+      return { ref: invLabel(i), title: `Invoice ${invLabel(i)} - ${i.subcontractor}`, amount: i.certified_amount, departmentId: null, projectId: i.project_id, url: `/invoices/${id}`, entity: ["invoice", id] };
     },
     canSubmit: (id) => (invoice(id)?.status === "certified" ? null : "Only certified invoices can be submitted for approval."),
     onApproved(id) { run("UPDATE sub_invoices SET status = 'approved' WHERE id = ? AND status = 'certified'", id); syncInvoiceCost(id); },
@@ -144,13 +144,14 @@ export const REGISTRY: Record<ApprovalDocType, RegistryEntry> = {
     type: "invoice_payment", label: "Invoice payment", module: "invoices", submitPermission: ["invoices", "pay"],
     getDocument(id, payload) {
       const i = invoice(id); if (!i) return null;
-      return { ref: invLabel(i), title: `Payment of invoice ${invLabel(i)} - ${i.subcontractor}`, amount: payload?.paid_amount !== undefined ? num(payload.paid_amount) : i.net_payable, departmentId: null, projectId: i.project_id, url: `/projects/${i.project_id}?tab=invoices`, entity: ["invoice", id] };
+      return { ref: invLabel(i), title: `Payment of invoice ${invLabel(i)} - ${i.subcontractor}`, amount: payload?.paid_amount !== undefined ? num(payload.paid_amount) : i.net_payable, departmentId: null, projectId: i.project_id, url: `/invoices/${id}`, entity: ["invoice", id] };
     },
     canSubmit: (id) => (invoice(id)?.status === "approved" ? null : "Only approved invoices can be paid."),
     onApproved(id, ctx) {
       const i = invoice(id)!;
       const amount = ctx.payload.paid_amount !== undefined ? num(ctx.payload.paid_amount) : i.net_payable;
-      run("UPDATE sub_invoices SET status = 'paid', paid_amount = ?, paid_date = ? WHERE id = ? AND status = 'approved'", amount, String(ctx.payload.paid_date || todayISO()), id);
+      run("UPDATE sub_invoices SET status = 'paid', paid_amount = ?, paid_date = ?, payment_method = COALESCE(?, payment_method), payment_ref = COALESCE(?, payment_ref) WHERE id = ? AND status = 'approved'",
+        amount, String(ctx.payload.paid_date || todayISO()), ctx.payload.payment_method ? String(ctx.payload.payment_method) : null, ctx.payload.payment_ref ? String(ctx.payload.payment_ref) : null, id);
       syncInvoiceCost(id);
     },
     onRejected: () => { /* stays approved */ },

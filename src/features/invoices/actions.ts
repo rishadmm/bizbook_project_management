@@ -8,10 +8,12 @@ import type { InvoiceStatus } from "@/lib/types";
 import { requireAnyPermission, requirePermission } from "@/lib/auth";
 import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
 import { guard, type ActionResult as FormResult } from "@/lib/action-result";
+import { DEFAULT_VAT_RATE, fromGross } from "./calc";
+import { applyCertificationToLines } from "./lines";
 
 interface InvRow {
   id: number; status: InvoiceStatus; project_id: number; claimed_amount: number; certified_amount: number; net_payable: number;
-  invoice_no: string | null; retention_pct: number; advance_pct: number; subcontractor_id: number;
+  invoice_no: string | null; retention_pct: number; advance_pct: number; subcontractor_id: number; vat_rate: number;
 }
 
 function load(form: FormData): InvRow {
@@ -25,16 +27,16 @@ async function done(inv: InvRow, action: string, message: string) {
   syncInvoiceCost(inv.id);
   await logActivity("invoice", inv.id, action, message);
   revalidatePath("/invoices"); revalidatePath("/"); revalidatePath(`/projects/${inv.project_id}`);
-  revalidatePath(`/subcontractors/${inv.subcontractor_id}`); revalidatePath("/", "layout");
+  revalidatePath(`/subcontractors/${inv.subcontractor_id}`); revalidatePath(`/invoices/${inv.id}`); revalidatePath("/", "layout");
 }
 const label = (i: InvRow) => i.invoice_no ?? `#${i.id}`;
 
 export async function startInvoiceReview(form: FormData): Promise<FormResult> {
   return guard(async () => {
-    await requirePermission("invoices", "certify");
+    const reviewer = await requirePermission("invoices", "certify");
     const inv = load(form);
     if (inv.status !== "submitted") throw new Error("Only submitted invoices can be put under review");
-    getDb().prepare("UPDATE sub_invoices SET status='under_review' WHERE id=?").run(inv.id);
+    getDb().prepare("UPDATE sub_invoices SET status='under_review', reviewed_by=? WHERE id=?").run(reviewer.id || null, inv.id);
     await done(inv, "review", `Invoice ${label(inv)} under review`);
   });
 }
@@ -51,8 +53,9 @@ export async function certifyInvoice(form: FormData): Promise<FormResult> {
     const net = certified - retention - advance;
     getDb().transaction(() => {
       withdrawOpenRequest("sub_invoice", inv.id, user.id);
-      getDb().prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=? WHERE id=?")
-        .run(certified, retention, advance, net, inv.id);
+      getDb().prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=?, certified_by=?, certified_at=? WHERE id=?")
+        .run(certified, retention, advance, net, user.id || null, new Date().toISOString(), inv.id);
+      applyCertificationToLines(getDb(), inv.id, fromGross(certified, inv.vat_rate || DEFAULT_VAT_RATE).subtotal);
       // Certification raises the multi-level sub_invoice approval (approved + cost posted on final approval).
       submitForApproval("sub_invoice", inv.id, { userId: user.id });
     })();
@@ -80,7 +83,7 @@ export async function payInvoice(form: FormData): Promise<FormResult> {
     if (!Number.isFinite(amount) || amount < 0) throw new Error("Paid amount is invalid");
     const date = String(form.get("paid_date") ?? "").trim() || todayISO();
     if (hasOpenRequest("invoice_payment", inv.id)) throw new Error("Payment approval is already pending");
-    submitForApproval("invoice_payment", inv.id, { userId: user.id, payload: { paid_amount: amount, paid_date: date } });
+    submitForApproval("invoice_payment", inv.id, { userId: user.id, payload: { paid_amount: amount, paid_date: date, payment_method: String(form.get("payment_method") ?? "").trim() || "Bank transfer", payment_ref: String(form.get("payment_ref") ?? "").trim() || null } });
     await done(inv, "approval", `Payment of invoice ${label(inv)} (${amount.toFixed(2)} on ${date}) submitted for approval`);
   });
 }

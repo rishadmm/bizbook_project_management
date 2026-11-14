@@ -11,7 +11,7 @@ export const MODULES = {
   ops_map: { label: "Live Ops Map", group: "Projects", actions: ["view"] },
   progress: { label: "Progress reports", group: "Projects", actions: ["view", "create", "verify"] },
   project_costs: { label: "Project costs", group: "Projects", actions: ["view", "create"] },
-  subcontractors: { label: "Subcontractors", group: "Subcontracting", actions: ["view", "create", "edit", "approve"] },
+  subcontractors: { label: "Subcontractors", group: "Subcontracting", actions: ["view", "create", "edit", "approve", "portal"] },
   invoices: { label: "Invoices", group: "Finance", actions: ["view", "certify", "approve", "pay"] },
   certificates: { label: "Completion certificates", group: "Finance", actions: ["view", "issue"] },
   approvals: { label: "Approvals inbox", group: "Administration", actions: ["view"] },

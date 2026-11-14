@@ -73,6 +73,9 @@ export const ragFrom = (spi: number | null, cpi: number | null): Rag => {
   return w >= 0.95 ? "green" : w >= 0.85 ? "amber" : "red";
 };
 
+const RAG_ORDER: Record<Rag, number> = { grey: 0, green: 1, amber: 2, red: 3 };
+/** The worse of two RAGs (grey = no opinion). */
+const worseRag = (a: Rag, b: Rag): Rag => (RAG_ORDER[b] > RAG_ORDER[a] ? b : a);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 /** Cumulative % at `date` from step history (0 before the first report). */
 export function pctAt(h: HistPt[], date: string): number {
@@ -123,7 +126,8 @@ export function computeSegment(seg: OpsSegment, asOf: string, today: string, iss
 
   // actual % at asOf
   let actual = base;
-  if (forecast && !completedNow) {
+  const suspended = seg.assignmentStatus === "suspended";
+  if (forecast && !completedNow && !suspended) {
     if (rate > 0) actual = base + (rate * daysBetween(e, asOf)) / 7;
     else if (base === 0 && pS && pE) {
       const from = maxIso(e, pS);
@@ -139,16 +143,22 @@ export function computeSegment(seg: OpsSegment, asOf: string, today: string, iss
   // projected end (evidence-based, as of e)
   let projectedEnd: string;
   let endedOn: string | null = null;
+  const MAX_SLIP = 365;
   if (completedNow) {
     const done = h.find((p) => p.pct >= 99.5) ?? lastPt;
     endedOn = done ? done.d : pE;
     projectedEnd = endedOn ?? e;
+  } else if (suspended) {
+    // work is stopped: planned end + the days it has been stopped so far (at least 14), never a near-zero-rate extrapolation
+    const stopped = Math.max(14, daysBetween(lastPt ? lastPt.d : e, asOf));
+    projectedEnd = addDays(pE ?? e, Math.min(MAX_SLIP, stopped));
   } else if (rate > 0) {
     projectedEnd = addDays(e, Math.min(1500, Math.ceil(((100 - base) / rate) * 7)));
   } else if (pE) {
     const lagDays = Math.max(0, ((plannedPctFor(pS, pE, e) - base) / 100) * planDays);
     projectedEnd = addDays(pE, Math.round(lagDays));
   } else projectedEnd = e;
+  if (pE && !completedNow && daysBetween(pE, projectedEnd) > MAX_SLIP) projectedEnd = addDays(pE, MAX_SLIP);
   const slipDays = pE ? daysBetween(pE, projectedEnd) : 0;
 
   const lastReport = lastPt ? lastPt.d : null;
@@ -169,6 +179,8 @@ export function computeSegment(seg: OpsSegment, asOf: string, today: string, iss
     if (s < 0.85 || slipDays > 14) status = "behind";
     else if (s < 0.95 || slipDays > 0 || (staleDays !== null && staleDays > 10)) status = "at_risk";
     else status = "on_track";
+    // forecast: a segment whose projection overruns its planned end stays flagged until it completes
+    if (forecast && slipDays > 0) status = slipDays > 14 ? "behind" : "at_risk";
   }
 
   // manpower: weekly average headcount over the last 4 weeks (oldest -> newest)
@@ -187,7 +199,8 @@ export function computeSegment(seg: OpsSegment, asOf: string, today: string, iss
   for (const [r, d] of Object.entries(delayByResp)) if (d > best) { best = d; dominant = r as Resp; }
 
   const earned = seg.contractValue * (actual / 100);
-  const cpi = seg.invoices.certified > 0 ? earned / seg.invoices.certified : null;
+  // CPI uses the evidence date (today in forecast mode): future earned value over frozen certified cost would only blow up
+  const cpi = seg.invoices.certified > 0 ? (seg.contractValue * (base / 100)) / seg.invoices.certified : null;
 
   const active = !forecast && staleDays !== null && staleDays <= 7 && actual < 99.5 && status !== "suspended";
   return {
@@ -226,17 +239,39 @@ export function computeProject(
   }
   if (wsum > 0 && Math.abs(wsum - 1) > 1e-6) { a /= wsum; pl /= wsum; }
   const e = asOf < today ? asOf : today;
+  const forecast = asOf > today;
   if (asOf >= today && p.forecastFinish && (!proj || p.forecastFinish > proj)) proj = p.forecastFinish;
   const bac = p.bac;
   const evBac = bac * (a / 100), pv = bac * (pl / 100);
   let ac = 0;
   for (const c of p.acHistory) if (c.d <= e) ac = c.cum;
-  if (asOf > today) ac = p.ac;
+  if (forecast) ac = p.ac;
   const spi = pv > 0 ? evBac / pv : null;
-  const cpi = ac > 0 ? evBac / ac : null;
   const delayDays = p.endDate && proj ? Math.max(0, daysBetween(p.endDate, proj)) : 0;
+  let cpi = ac > 0 ? evBac / ac : null;
+  let rag: Rag = bac === 0 && !segs.length ? "grey" : ragFrom(spi, cpi);
+  rag = worseRag(rag, delayDays > 90 ? "red" : delayDays > 30 ? "amber" : "grey");
+  if (forecast) {
+    // forecast mode: EV/AC at the (frozen) cost would only blow up, and SPI -> 1 once plan and forecast both reach 100 %.
+    // Use today's CPI and judge the projected outcome (delay), falling back to today's RAG when no delay is projected.
+    let aN = 0, plN = 0, wN = 0;
+    const byKey = new Map<string, OpsIssue[]>();
+    for (const i of issues) for (const k of i.segKeys) { const x = byKey.get(k) ?? []; x.push(i); byKey.set(k, x); }
+    for (const s of segs) {
+      const d = computeSegment(s, today, today, byKey.get(s.key) ?? []);
+      aN += s.weight * d.actualPct; plN += s.weight * d.plannedPct; wN += s.weight;
+    }
+    if (wN > 0 && Math.abs(wN - 1) > 1e-6) { aN /= wN; plN /= wN; }
+    const evN = bac * (aN / 100), pvN = bac * (plN / 100);
+    let acN = 0;
+    for (const c of p.acHistory) if (c.d <= today) acN = c.cum;
+    const spiN = pvN > 0 ? evN / pvN : null;
+    cpi = acN > 0 ? evN / acN : null;
+    const ragToday: Rag = bac === 0 && !segs.length ? "grey" : ragFrom(spiN, cpi);
+    rag = delayDays > 30 ? "red" : delayDays > 0 ? "amber" : ragToday;
+  }
   const openIssues = issues.filter((i) => i.projectId === p.id && i.status !== "closed" && i.raisedOn && i.raisedOn <= asOf && (!i.resolvedOn || i.resolvedOn > asOf)).length;
-  return { actualPct: a, plannedPct: pl, spi, cpi, rag: bac === 0 && !segs.length ? "grey" : ragFrom(spi, cpi), projectedFinish: proj, delayDays, ev: evBac, pv, ac, completedQty, behindQty, openIssues, behindKm, doneKm, counts };
+  return { actualPct: a, plannedPct: pl, spi, cpi, rag, projectedFinish: proj, delayDays, ev: evBac, pv, ac, completedQty, behindQty, openIssues, behindKm, doneKm, counts };
 }
 
 export function computeKpis(projects: OpsProject[], segs: OpsSegment[], d: Derived): Kpis {
@@ -253,14 +288,17 @@ export function computeKpis(projects: OpsProject[], segs: OpsSegment[], d: Deriv
       totalKm += s.lengthKm; doneKm += (s.lengthKm * x.actualPct) / 100; behindKm += (s.lengthKm * Math.max(0, x.plannedPct - x.actualPct)) / 100;
     }
   }
-  let active = 0;
+  let active = 0, cpiW = 0, cpiAc = 0;
   for (const p of projects) {
     const pd = d.proj.get(p.id)!;
     if (!p.startDate || p.startDate <= d.asOf) active++;
     pvs += pd.pv; evs += pd.ev; acs += pd.ac;
+    if (pd.cpi !== null && pd.ac > 0) { cpiW += pd.cpi * pd.ac; cpiAc += pd.ac; }
     if (pd.delayDays > worst) { worst = pd.delayDays; worstProject = p.code; }
   }
-  return { activeProjects: active, totalKm, doneKm, behindKm, atRisk, behind, segments: n, spi: pvs > 0 ? evs / pvs : null, cpi: acs > 0 ? evs / acs : null, worstSlip: worst, worstProject };
+  // forecast: project CPIs are today's (cost is frozen), so weight them by cost instead of dividing future EV by frozen AC
+  const cpiK = d.forecast ? (cpiAc > 0 ? cpiW / cpiAc : null) : acs > 0 ? evs / acs : null;
+  return { activeProjects: active, totalKm, doneKm, behindKm, atRisk, behind, segments: n, spi: pvs > 0 ? evs / pvs : null, cpi: cpiK, worstSlip: worst, worstProject };
 }
 
 /** Delay attribution (parties) across the given projects at `asOf`. */

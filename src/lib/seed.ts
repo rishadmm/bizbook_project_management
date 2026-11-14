@@ -13,6 +13,9 @@ import { hashPassword } from "./password";
 import { DEFAULT_ONBOARDING_ITEMS, DEFAULT_TENDER_SECTIONS, DEPARTMENTS } from "./status";
 import { installDefaultWorkflows } from "./approvals/defaults";
 import { seedApprovalDemo } from "./approvals/seed-demo";
+import { seedInvoiceDetails, seedInvoiceDocuments } from "./seed-invoices";
+import { seedPortal } from "./seed-portal";
+import { DEMO_PORTAL_PASSWORD } from "./portal-core";
 
 const UPLOADS = process.env.OPS_UPLOAD_DIR ?? path.join(process.cwd(), "uploads");
 fs.rmSync(UPLOADS, { recursive: true, force: true });
@@ -75,6 +78,8 @@ const rect = (x0: number, y0: number, x1: number, y1: number): Pt[][] => [[[x0, 
 /* ---------------------------------------------------------------- core: departments, users, clients, settings */
 db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('company_name','Al Noor Infrastructure LLC')").run();
 db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('currency','AED')").run();
+db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('company_address','Office 1204, Al Moosa Tower 2, Sheikh Zayed Road, Dubai, United Arab Emirates')").run();
+db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('company_trn','100234567800003')").run();
 const DEPT: Record<string, number> = {};
 for (const [name, code] of DEPARTMENTS) DEPT[name] = ins("departments", { name, code });
 
@@ -112,6 +117,7 @@ const CL = {
   mun: ins("clients", { name: "Dubai Municipality (demo)", type: "government", contact_person: "Hind Al Maktoum", email: "contracts@dm-demo.ae", phone: "+971 4 000 4400", address: "Deira, Dubai", notes: null }),
   dev: ins("clients", { name: "Skyline Developments (demo)", type: "private", contact_person: "James Whitfield", email: "pm@skyline-demo.ae", phone: "+971 4 000 5500", address: "Downtown Dubai", notes: "Master developer, Dubai South." }),
   adm: ins("clients", { name: "Abu Dhabi Mobility (demo)", type: "road_authority", contact_person: "Saeed Al Dhaheri", email: "tenders@admobility-demo.ae", phone: "+971 2 000 6600", address: "Abu Dhabi", notes: null }),
+  oth: ins("clients", { name: "Gulf Logistics Cooperative (demo)", type: "other", contact_person: "Rashed Al Ketbi", email: "facilities@glc-demo.ae", phone: "+971 2 000 7700", address: "Khalifa Port, Abu Dhabi", notes: "Member-owned logistics operator; frequent small paving and yard works." }),
 };
 
 /* ---------------------------------------------------------------- budget templates */
@@ -207,7 +213,38 @@ const zoneRects = [rect(X0, Y0, X0 + DX / 2, Y0 + DY / 2), rect(X0 + DX / 2, Y0,
 const P4_STAGES: StagePlan[] = zoneRects.map((r, i) => ({
   code: `S${i + 1}`, name: zoneNames[i], geometry: feat({ type: "Polygon", coordinates: r }, { stage: `S${i + 1}` }), qty: r0(turf.area(turf.polygon(r))), unit: "sqm", from: null, to: null, weight: [30, 25, 25, 20][i],
 }));
-console.log(`Geometry: P1 ${P1_KM} km, P2 ${P2_KM} km, P3 ${P3_KM} km, P4 ${(P4_AREA / 10000).toFixed(0)} ha`);
+// polygon split into n vertical strips (zones)
+function polyStages(x0: number, y0: number, dx: number, dy: number, names: string[], weights: number[]): StagePlan[] {
+  return names.map((name, i) => {
+    const r = rect(r2e(x0 + (dx * i) / names.length), y0, r2e(x0 + (dx * (i + 1)) / names.length), y0 + dy);
+    return { code: `S${i + 1}`, name, geometry: feat({ type: "Polygon", coordinates: r }, { stage: `S${i + 1}` }), qty: r0(turf.area(turf.polygon(r))), unit: "sqm", from: null, to: null, weight: weights[i] };
+  });
+}
+// P7: Al Khaleej Al Arabi Street rehabilitation (Abu Dhabi) - amber
+const P7_LINE = route([54.3560, 24.4600], [54.4150, 24.5020], 10, 0.0025, 0.9);
+const P7_KM = r1(lineKm(P7_LINE));
+const P7_STAGES = lineStages(P7_LINE, 4, "Section");
+// P8: Sharjah Muwaileh 5G duct bank - green
+const P8_LINE = route([55.4300, 25.2900], [55.4900, 25.3300], 8, 0.0020, 1.6);
+const P8_KM = r1(lineKm(P8_LINE));
+const P8_STAGES = lineStages(P8_LINE, 3, "Phase");
+// P9: Al Quoz water main replacement - completed
+const P9_LINE = route([55.2200, 25.1300], [55.2650, 25.1500], 6, 0.0020, 0.3);
+const P9_KM = r1(lineKm(P9_LINE));
+const P9_STAGES = lineStages(P9_LINE, 2, "Reach");
+// P10: Khalifa Port logistics yard paving - closed (polygon)
+const P10_X = 54.6300, P10_Y = 24.7950, P10_DX = 0.0180, P10_DY = 0.0090;
+const P10_POLY = rect(P10_X, P10_Y, P10_X + P10_DX, P10_Y + P10_DY);
+const P10_STAGES = polyStages(P10_X, P10_Y, P10_DX, P10_DY, ["Yard 1 – container stack area", "Yard 2 – truck marshalling & gate complex"], [55, 45]);
+// P11: Fujairah coastal road link - on hold
+const P11_LINE = route([56.3250, 25.1100], [56.3600, 25.2200], 8, 0.0025, 2.4);
+const P11_KM = r1(lineKm(P11_LINE));
+const P11_STAGES = lineStages(P11_LINE, 3, "Link");
+// P12: Dubai Hills FTTH phase 2 - planning (polygon)
+const P12_X = 55.2380, P12_Y = 25.0980, P12_DX = 0.0180, P12_DY = 0.0090;
+const P12_POLY = rect(P12_X, P12_Y, P12_X + P12_DX, P12_Y + P12_DY);
+const P12_STAGES = polyStages(P12_X, P12_Y, P12_DX, P12_DY, ["Cluster A – Maple & Sidra villas", "Cluster B – Park Ridge", "Cluster C – Golf Place"], [35, 35, 30]);
+console.log(`Geometry: P1 ${P1_KM} km, P2 ${P2_KM} km, P3 ${P3_KM} km, P4 ${(P4_AREA / 10000).toFixed(0)} ha, P7 ${P7_KM} km, P8 ${P8_KM} km, P9 ${P9_KM} km, P11 ${P11_KM} km`);
 
 /* ---------------------------------------------------------------- tenders */
 interface RevCfg { status: string; mDelta: number; cFactor: number; reason: string; submitted: number | null; feedback?: string }
@@ -249,6 +286,12 @@ const TENDERS: TenderCfg[] = [
     revs: [R("draft", 0, 1, "Pricing started before no-bid decision", null)] },
   { title: "Palm Jumeirah utility corridor (EOI)", client: CL.dev, kind: "eoi", category: "civil", location: "Palm Jumeirah", scope: "Expression of interest for a utility corridor; programme cancelled by client.", qty: null, unit: "lumpsum", issue: -60, clar: -50, submit: -25, cost: 21e6, status: "cancelled", prob: 0, owner: U[3], stages: pkgs, decided: -18,
     revs: [R("draft", 0, 1, "Initial EOI pricing", null)] },
+  { title: "Abu Dhabi Ring Road bridge deck rehabilitation", client: CL.adm, kind: "tender", category: "civil", location: "Abu Dhabi Ring Road", scope: "Rehabilitation of 6 bridge decks incl. bearing replacement, waterproofing and night-time traffic management.", qty: 6, unit: "nos", issue: -220, clar: -205, submit: -190, cost: 41e6, status: "lost", prob: 0, owner: U[3], stages: pkgs, decided: -140, submittedAt: -190,
+    revs: [R("superseded", 0, 1, "Initial submission", -190, "Technical compliance gaps noted in the structural methodology."), R("submitted", -1, 0.99, "Clarification response", -165, "Bridge-specialist prequalification not demonstrated. Awarded to a joint venture.")] },
+  { title: "Ajman–Umm Al Quwain 132 kV cable duct package", client: CL.wea, kind: "tender", category: "cable", location: "Ajman – Umm Al Quwain", scope: "Duct bank and cable pulling for a 132 kV transmission link, 14 km, incl. 4 highway crossings.", qty: 14, unit: "km", issue: -140, clar: -128, submit: -100, cost: 18e6, status: "lost", prob: 0, owner: U[3], stages: pkgs, decided: -60, submittedAt: -100,
+    revs: [R("submitted", 0, 1, "Initial submission", -100, "Scored below the minimum for similar HV references; awarded to an incumbent contractor.")] },
+  { title: "Dubai Creek Harbour utilities spine", client: CL.dev, kind: "proposal", category: "civil", location: "Dubai Creek Harbour", scope: "Design & build of a 3.2 km multi-utility spine (power, water, district cooling, telecom ducts).", qty: 3.2, unit: "km", issue: -110, clar: -98, submit: -80, cost: 29e6, status: "lost", prob: 0, owner: U[3], stages: pkgs, decided: -45, submittedAt: -80,
+    revs: [R("submitted", 0, 1, "Initial submission", -80, "Master developer preferred its framework contractor on this phase.")] },
 ];
 
 const SECTION_TEXT: Record<string, string> = {
@@ -328,8 +371,9 @@ TENDERS.forEach((t, idx) => {
       let decision = "approved";
       if (t.status === "under_review") decision = di < 2 ? "approved" : "pending";
       if (t.status === "under_review" && di === 1) decision = "changes_requested";
+      if (t.status === "under_review" && di === 2) decision = "rejected";
       ins("tender_reviews", { tender_id: tid, revision_id: tenderRevs[tid][0].id, department_id: DEPT[d], reviewer_id: deptUser[d],
-        decision, comment: decision === "approved" ? "Reviewed and approved." : decision === "changes_requested" ? "Cash-flow assumptions need a 60-day payment cycle; please revisit contingency." : null,
+        decision, comment: decision === "approved" ? "Reviewed and approved." : decision === "changes_requested" ? "Cash-flow assumptions need a 60-day payment cycle; please revisit contingency." : decision === "rejected" ? "Crew histogram cannot be supported with current commitments; resubmit with phased mobilisation." : null,
         decided_at: decision === "pending" ? null : off(Math.min(t.submit - 3, -1)) + " 15:00:00" });
     });
     log("tender", tid, "review", "Sent for internal review", U[3], off(Math.min(t.submit - 5, -2)));
@@ -337,11 +381,11 @@ TENDERS.forEach((t, idx) => {
   // negotiations
   if (["negotiation", "won"].includes(t.status) || (t.status === "lost" && idx === 4)) {
     const revs = tenderRevs[tid];
-    const nCount = t.status === "negotiation" ? 3 : 1 + (idx % 2);
+    const nCount = t.status === "negotiation" ? 5 : 1 + (idx % 2);
     for (let n = 0; n < nCount; n++) {
       const rev = revs[Math.min(n, revs.length - 1)];
       const price = q1<any>("SELECT total_price p FROM tender_revisions WHERE id=?", rev.id)!.p;
-      ins("negotiations", { tender_id: tid, revision_id: rev.id, date: off((t.decided ?? -10) - 25 + n * 9), channel: ["meeting", "email", "call"][n % 3],
+      ins("negotiations", { tender_id: tid, revision_id: rev.id, date: off((t.decided ?? -10) - 25 + n * (t.status === "negotiation" ? 6 : 9)), channel: ["meeting", "email", "call", "letter", "site_visit"][n % 5],
         summary: `Round ${n + 1}: commercial discussion on price, retention and programme.`, client_position: "Requests price reduction and shorter programme.", our_position: "Offered VE options; programme driven by permit durations.",
         client_target_price: r0(price * (0.94 + n * 0.012)), outcome: n === nCount - 1 ? "Converging" : "Open", next_step: n === nCount - 1 ? "Finalise BAFO" : "Submit revised pricing" });
     }
@@ -356,6 +400,9 @@ const LOSS = [
   { idx: 4, reason: "price", secondary: "programme, relationship", winner: "Emirates Roadworks Group", gap: 13.2, score: 82, fb: "Technically compliant; commercial offer 13% above the awarded bid.", root: "Overhead and contingency set too conservatively; earthworks subcontract quotes not re-tendered.", lessons: "Re-tender major subcontract packages before final price; use benchmarking on earthworks rates.", actions: "1. Build rate benchmark library (Procurement). 2. Add a pre-submission price-gap check (Commercial).", status: "closed" },
   { idx: 5, reason: "technical", secondary: "experience", winner: "Gulf Fibre Networks", gap: 4.5, score: 61, fb: "HDD methodology and risk mitigation scored below threshold.", root: "Methodology section written late; no HDD specialist reviewed it.", lessons: "Involve specialist subcontractors in methodology early; allow 5 days for technical review.", actions: "1. Engage HDD specialist on retainer. 2. Technical peer review gate.", status: "in_review" },
   { idx: 6, reason: "timeline", secondary: "scope", winner: "Capital Civil Works", gap: -2.0, score: 74, fb: "Our programme was 4 months longer than awardee.", root: "Conservative productivity assumptions and sequential phasing.", lessons: "Challenge programme with overlapping phases; confirm crew availability early.", actions: "1. Programme workshop template. 2. Maintain productivity database from live projects.", status: "open" },
+  { idx: 15, reason: "compliance", secondary: "technical, experience", winner: "Gulf Bridge Consortium (JV)", gap: 6.8, score: 58, fb: "Bridge-specialist prequalification not demonstrated; structural methodology incomplete.", root: "No named bridge-rehabilitation subcontractor and a late structural review of the bearing replacement method.", lessons: "Secure a bridge-specialist teaming agreement before bid launch; run a compliance matrix against the RFP on day 3.", actions: "1. RFP compliance matrix template (Commercial). 2. Framework agreement with a bridge specialist (Procurement).", status: "closed" },
+  { idx: 16, reason: "experience", secondary: "price", winner: "Union Power Contractors", gap: 3.1, score: 66, fb: "Scored below the minimum for HV cable references (less than 3 comparable 132 kV links).", root: "Reference list had no 132 kV work; credentials not packaged for the evaluator.", lessons: "Build a credentials library per voltage class and partner with a utility-experienced joint-venture party.", actions: "1. Credentials library (Commercial). 2. Evaluate JV partners for HV work (Management).", status: "in_review" },
+  { idx: 17, reason: "relationship", secondary: "timeline", winner: "Skyline Preferred Contractor", gap: 1.4, score: 79, fb: "Master developer preferred its framework contractor on this phase.", root: "Late engagement with the developer before the RFP was issued; no existing framework agreement.", lessons: "Pursue framework agreements with master developers and engage during master-planning, not at RFP.", actions: "1. Account plan for Skyline Developments (Management). 2. Offer a phase-2 capability presentation (Commercial).", status: "open" },
 ];
 for (const l of LOSS) {
   const tid = tenderIds[l.idx];
@@ -379,15 +426,16 @@ const SUBS: SubCfg[] = [
   { name: "Sahara Civil & Shoring", trade: "Civil works & shoring", cats: "civil,pipeline", status: "approved", rating: 3.8, checklist: 6, docs: [["trade_license", 25, "verified"], ["insurance", 200, "verified"], ["tax_certificate", 450, "verified"], ["bank_letter", null, "verified"]] },
   { name: "Blue Horizon Survey & Testing", trade: "Survey & materials testing", cats: "road,cable,pipeline,civil", status: "approved", rating: 4.5, checklist: 6, docs: [["trade_license", 400, "verified"], ["insurance", 310, "verified"], ["iso", 500, "verified"], ["company_profile", null, "verified"]] },
   { name: "Nexus Traffic & Safety Solutions", trade: "Traffic management & signage", cats: "road", status: "onboarding", rating: null, checklist: 3, docs: [["trade_license", 280, "verified"], ["insurance", 130, "pending"], ["hse_certificate", null, "pending"]] },
-  { name: "Pinnacle Directional Drilling", trade: "HDD & thrust boring", cats: "cable,pipeline", status: "prospect", rating: null, checklist: 1, docs: [["trade_license", 330, "pending"], ["company_profile", null, "pending"]] },
+  { name: "Pinnacle Directional Drilling", trade: "HDD & thrust boring", cats: "cable,pipeline", status: "prospect", rating: null, checklist: 1, docs: [["trade_license", 330, "pending"], ["company_profile", null, "rejected"]] },
   { name: "Marina Landscaping & Finishing", trade: "Landscaping & finishing", cats: "civil", status: "suspended", rating: 2.9, checklist: 6, docs: [["trade_license", -35, "expired"], ["insurance", -12, "expired"], ["tax_certificate", 200, "verified"]] },
+  { name: "Al Safa Manpower & Rigging", trade: "Labour supply & rigging", cats: "road,civil", status: "blacklisted", rating: 1.8, checklist: 4, docs: [["trade_license", -90, "expired"], ["insurance", null, "rejected"], ["hse_certificate", -200, "expired"]] },
 ];
 const SUB: number[] = [0];
 SUBS.forEach((s, i) => {
-  const id = ins("subcontractors", { code: `SUB-${String(i + 1).padStart(3, "0")}`, name: s.name, trade: s.trade, categories: s.cats, contact_person: ["Mohammed Faisal", "Ahmed Younis", "Bilal Siddiqui", "Karim Haddad", "Rashid Al Zaabi", "Vikram Nair", "Ali Reza", "Omar Said", "Sandeep Kumar", "Hassan Jaber"][i],
-    email: `info@${s.name.toLowerCase().replace(/[^a-z]+/g, "").slice(0, 14)}-demo.ae`, phone: `+971 5${i} ${100 + i * 7} ${2000 + i * 111}`, address: ["Al Quoz", "Jebel Ali", "Ras Al Khor", "Sharjah Industrial", "Al Qusais", "Dubai Investment Park", "Al Quoz", "Mussafah", "Ajman", "Dubai Marina"][i] + ", UAE",
+  const id = ins("subcontractors", { code: `SUB-${String(i + 1).padStart(3, "0")}`, name: s.name, trade: s.trade, categories: s.cats, contact_person: ["Mohammed Faisal", "Ahmed Younis", "Bilal Siddiqui", "Karim Haddad", "Rashid Al Zaabi", "Vikram Nair", "Ali Reza", "Omar Said", "Sandeep Kumar", "Hassan Jaber", "Nadeem Akhtar"][i],
+    email: `info@${s.name.toLowerCase().replace(/[^a-z]+/g, "").slice(0, 14)}-demo.ae`, phone: `+971 5${i} ${100 + i * 7} ${2000 + i * 111}`, address: ["Al Quoz", "Jebel Ali", "Ras Al Khor", "Sharjah Industrial", "Al Qusais", "Dubai Investment Park", "Al Quoz", "Mussafah", "Ajman", "Dubai Marina", "Sajja, Sharjah"][i] + ", UAE",
     trade_license_no: `CN-${1000000 + i * 8731}`, trade_license_expiry: off(s.docs.find((d) => d[0] === "trade_license")?.[1] ?? 300), tax_no: `1000${i}2345600003`, bank_name: ["Emirates NBD", "ADCB", "Mashreq", "FAB"][i % 4], iban: `AE07 0331 2345 6789 0123 ${400 + i}`,
-    status: s.status, rating: s.rating, notes: i === 2 ? "Performance concerns on current assignments (crew shortage, equipment breakdowns)." : null, created_at: off(-420 + i * 15) + " 09:00:00" });
+    status: s.status, rating: s.rating, notes: i === 2 ? "Performance concerns on current assignments (crew shortage, equipment breakdowns)." : i === 10 ? "Blacklisted after falsified HSE records found in the Q2 audit." : i === 9 ? "Suspended: trade licence and insurance expired; works halted until renewed." : null, created_at: off(-420 + i * 15) + " 09:00:00" });
   SUB.push(id);
   DEFAULT_ONBOARDING_ITEMS.forEach((item, k) => {
     const done = k < s.checklist;
@@ -401,11 +449,13 @@ SUBS.forEach((s, i) => {
   log("subcontractor", id, "create", `Subcontractor ${s.name} registered (${s.status})`, U[8], off(-420 + i * 15));
 });
 const [, SC_DESERT, SC_ASPHALT, SC_GULF, SC_FALCON, SC_WASL, SC_SAHARA, SC_BLUE] = SUB;
+const SC_MARINA = SUB[10];
 
 /* ---------------------------------------------------------------- projects, stages, budget */
 interface PCfg {
   code: string; name: string; tenderIdx: number | null; client: number; parent: number | null; category: string; region: string; location: string; start: number; end: number; status: string; manager: number;
   qty: number; unit: string; geometry: any; stages: StagePlan[]; desc: string; budget?: number; contract?: number; cpi: number;
+  /** budget template for projects that do not come from a tender (generates project budget lines) */ tpl?: string;
 }
 const projectIds: number[] = [];
 const stageIds: Record<number, number[]> = {};
@@ -414,17 +464,20 @@ const stageInfo: Record<number, { id: number; plan: StagePlan; budget: number; p
 function createProject(c: PCfg): number {
   const tid = c.tenderIdx !== null ? tenderIds[c.tenderIdx] : null;
   let budget = c.budget ?? 0, contract = c.contract ?? 0;
-  let lineRows: { spec: LineSpec; srcId: number }[] = [];
+  let lineRows: { spec: LineSpec; srcId: number | null }[] = [];
   if (tid) {
     const fr = tenderRevs[tid].find((r) => r.status === "final")!;
     const t = q1<any>("SELECT total_cost c, total_price p FROM tender_revisions WHERE id=?", fr.id)!;
     budget = r0(t.c); contract = r0(t.p);
     lineRows = fr.specs.map((spec, i) => ({ spec, srcId: fr.lines[i] }));
+  } else if (c.tpl) {
+    lineRows = genLines(budget, c.stages.map((s) => s.name), c.tpl).map((spec) => ({ spec, srcId: null }));
   }
+  const created = Math.min(c.start - 14, -10);
   const pid = ins("projects", {
     code: c.code, name: c.name, tender_id: tid, client_id: c.client, parent_id: c.parent, category: c.category, region: c.region, location: c.location, contract_value: contract, budget_cost: budget,
     start_date: off(c.start), end_date: off(c.end), status: c.status, manager_id: c.manager, total_quantity: c.qty, quantity_unit: c.unit, geometry: JSON.stringify(c.geometry), description: c.desc,
-    created_at: off(c.start - 14) + " 09:00:00",
+    created_at: off(created) + " 09:00:00",
   });
   projectIds.push(pid);
   if (tid) db.prepare("UPDATE tenders SET project_id = ? WHERE id = ?").run(pid, tid);
@@ -448,7 +501,7 @@ function createProject(c: PCfg): number {
     ins("project_budget_lines", { project_id: pid, stage_id: st?.id ?? null, category: l.spec.category, description: l.spec.description, unit: l.spec.unit, quantity: l.spec.quantity, unit_cost: l.spec.unit_cost,
       budget_amount: r0(l.spec.quantity * l.spec.unit_cost), source_budget_line_id: l.srcId });
   }
-  log("project", pid, "create", `Project ${c.code} created${tid ? " from tender " + q1<any>("SELECT code FROM tenders WHERE id=?", tid)!.code : ""}`, c.manager, off(c.start - 14));
+  log("project", pid, "create", `Project ${c.code} created${tid ? " from tender " + q1<any>("SELECT code FROM tenders WHERE id=?", tid)!.code : ""}`, c.manager, off(created));
   return pid;
 }
 
@@ -461,9 +514,22 @@ const P3 = createProject({ code: "PRJ-2026-003", name: "Al Ain Road Trunk Water 
 const P4 = createProject({ code: "PRJ-2026-004", name: "Dubai South Utilities & Civil Enabling Works", tenderIdx: 3, client: CL.dev, parent: null, category: "civil", region: "Dubai South", location: "Dubai South", start: -75, end: 270, status: "active", manager: U[7], qty: P4_AREA, unit: "sqm",
   geometry: fc([feat({ type: "Polygon", coordinates: P4_POLY }, { kind: "project" })]), stages: P4_STAGES, desc: "180 ha enabling works in four zones. Slightly behind plan due to late design approval.", cpi: 0.94 });
 const P2A = createProject({ code: "PRJ-2026-005", name: "Fibre Link A – Jebel Ali Handholes & Spurs", tenderIdx: null, client: CL.tel, parent: P2, category: "cable", region: "Dubai", location: "Jebel Ali section", start: -150, end: 90, status: "active", manager: U[7], qty: r1(lineKm(P2A_LINE)), unit: "km",
-  geometry: fc([feat({ type: "LineString", coordinates: P2A_LINE }, { kind: "project" })]), stages: P2A_STAGES, desc: "Sub-project of PRJ-2026-002: spur links and handholes, southern sector.", budget: 6.2e6, contract: 7.0e6, cpi: 1.0 });
+  geometry: fc([feat({ type: "LineString", coordinates: P2A_LINE }, { kind: "project" })]), stages: P2A_STAGES, desc: "Sub-project of PRJ-2026-002: spur links and handholes, southern sector.", budget: 6.2e6, contract: 7.0e6, cpi: 1.0, tpl: "cable" });
 const P2B = createProject({ code: "PRJ-2026-006", name: "Fibre Link B – Sharjah Interconnect", tenderIdx: null, client: CL.tel, parent: P2, category: "cable", region: "Sharjah", location: "Sharjah section", start: 10, end: 170, status: "mobilizing", manager: U[7], qty: r1(lineKm(P2B_LINE)), unit: "km",
-  geometry: fc([feat({ type: "LineString", coordinates: P2B_LINE }, { kind: "project" })]), stages: P2B_STAGES, desc: "Sub-project of PRJ-2026-002: northern sector interconnect to Sharjah exchange.", budget: 5.1e6, contract: 5.8e6, cpi: 1.0 });
+  geometry: fc([feat({ type: "LineString", coordinates: P2B_LINE }, { kind: "project" })]), stages: P2B_STAGES, desc: "Sub-project of PRJ-2026-002: northern sector interconnect to Sharjah exchange.", budget: 5.1e6, contract: 5.8e6, cpi: 1.0, tpl: "cable" });
+const fcl = (g: any) => fc([feat(g, { kind: "project" })]);
+const P7 = createProject({ code: "PRJ-2026-007", name: "Al Khaleej Al Arabi Street Rehabilitation", tenderIdx: null, client: CL.adm, parent: null, category: "road", region: "Abu Dhabi", location: "Al Khaleej Al Arabi Street, Abu Dhabi", start: -170, end: 90, status: "active", manager: U[1], qty: P7_KM, unit: "km",
+  geometry: fcl({ type: "LineString", coordinates: P7_LINE }), stages: P7_STAGES, desc: "Milling, base reconstruction and resurfacing of a coastal arterial. Cable clashes and event closures cost time; the base-course crew is over budget.", budget: 21.5e6, contract: 24.6e6, cpi: 0.9, tpl: "road" });
+const P8 = createProject({ code: "PRJ-2026-008", name: "Sharjah Muwaileh 5G Duct Bank", tenderIdx: null, client: CL.tel, parent: null, category: "telecom", region: "Sharjah", location: "Muwaileh, Sharjah", start: -120, end: 100, status: "active", manager: U[2], qty: P8_KM, unit: "km",
+  geometry: fcl({ type: "LineString", coordinates: P8_LINE }), stages: P8_STAGES, desc: "Multi-way duct bank for 5G backhaul. Ahead of plan; the chambers contractor is stood down after an HSE stop-work order.", budget: 9.4e6, contract: 10.8e6, cpi: 1.04, tpl: "telecom" });
+const P9 = createProject({ code: "PRJ-2026-009", name: "Al Quoz Water Main Replacement", tenderIdx: null, client: CL.wea, parent: null, category: "pipeline", region: "Dubai", location: "Al Quoz, Dubai", start: -420, end: -70, status: "completed", manager: U[7], qty: P9_KM, unit: "km",
+  geometry: fcl({ type: "LineString", coordinates: P9_LINE }), stages: P9_STAGES, desc: "Replacement of an ageing 450 mm main. Completed, certified and handed over.", budget: 17.8e6, contract: 20.1e6, cpi: 1.03, tpl: "pipeline" });
+const P10 = createProject({ code: "PRJ-2026-010", name: "Khalifa Port Logistics Yard Paving", tenderIdx: null, client: CL.adm, parent: null, category: "other", region: "Abu Dhabi", location: "Khalifa Port, Abu Dhabi", start: -560, end: -240, status: "closed", manager: U[2], qty: r0(turf.area(turf.polygon(P10_POLY))), unit: "sqm",
+  geometry: fcl({ type: "Polygon", coordinates: P10_POLY }), stages: P10_STAGES, desc: "Heavy-duty paving of two container yards. Final account agreed and project closed.", budget: 12.6e6, contract: 14.2e6, cpi: 1.01, tpl: "other" });
+const P11 = createProject({ code: "PRJ-2026-011", name: "Fujairah Coastal Road Link", tenderIdx: null, client: CL.rta, parent: null, category: "road", region: "Fujairah", location: "Fujairah Corniche to Dibba road", start: 30, end: 400, status: "on_hold", manager: U[7], qty: P11_KM, unit: "km",
+  geometry: fcl({ type: "LineString", coordinates: P11_LINE }), stages: P11_STAGES, desc: "New 2-lane coastal link. On hold pending the client's land-acquisition and funding release.", budget: 33e6, contract: 37.5e6, cpi: 1.0, tpl: "road" });
+const P12 = createProject({ code: "PRJ-2026-012", name: "Dubai Hills FTTH – Phase 2 Build", tenderIdx: null, client: CL.tel, parent: null, category: "telecom", region: "Dubai", location: "Dubai Hills Estate", start: 75, end: 330, status: "planning", manager: U[2], qty: r0(turf.area(turf.polygon(P12_POLY))), unit: "sqm",
+  geometry: fcl({ type: "Polygon", coordinates: P12_POLY }), stages: P12_STAGES, desc: "Last-mile fibre for 2,400 villas in three clusters. Planning: design and permits under way.", budget: 19.5e6, contract: 22.4e6, cpi: 1.0, tpl: "telecom" });
 console.log("Projects", projectIds.join(","));
 
 /* ---------------------------------------------------------------- assignments + progress simulation */
@@ -472,6 +538,10 @@ interface AsgCfg {
   project: number; stageIdx: number; sub: number; kind: "primary" | "secondary" | "draft"; a0?: number; a1?: number; pct?: number; stalls?: Stall[];
   cvFactor?: number; portal?: boolean; retention?: number; advance?: number; days?: number; scope: string; overclaim?: number; pendingLast?: number; crew?: number; status?: string;
   stageStatus?: string; rejectInvoice?: boolean; lumpsum?: boolean; ccType?: string[];
+  /** measured quantity of a secondary scope as a share of the stage quantity (instead of a lump sum) */ qtyShare?: number;
+  /** calibrate certified invoices so that the segment CPI (earned / certified) equals this */ cpi?: number;
+  /** extra portal reports rejected by the project manager */ rejected?: number;
+  /** label used by the issue seed to find this assignment */ tag?: string;
 }
 const MAT_PLAN: Record<string, [string, string, number, number][]> = {
   road: [["Asphalt wearing course", "ton", 310, 0.55], ["Aggregate base course", "m3", 95, 0.45]],
@@ -503,7 +573,7 @@ function createAssignment(cfg: AsgCfg): void {
   const active = cfg.kind !== "draft";
   const complete = active && cfg.pct === 100 && (cfg.a1 ?? 0) < -1;
   const status = cfg.status ?? (cfg.kind === "draft" ? "draft" : complete ? "completed" : "active");
-  const qty = cfg.lumpsum || cfg.kind === "secondary" ? null : st.plan.qty;
+  const qty = cfg.lumpsum || (cfg.kind === "secondary" && !cfg.qtyShare) ? null : r2(st.plan.qty * (cfg.qtyShare ?? 1));
   const asgId = ins("assignments", {
     code, project_id: pid, stage_id: st.id, subcontractor_id: cfg.sub, scope: cfg.scope, contract_value: cv, quantity: qty, quantity_unit: qty ? st.plan.unit : "lumpsum", unit_rate: qty ? r2(cv / qty) : null,
     start_date: st.pstart, end_date: st.pend, payment_terms: `Monthly certified invoices, ${cfg.advance ?? 10}% advance recovered pro-rata, ${cfg.retention ?? 5}% retention, payment within ${cfg.days ?? 30} days of certification.`,
@@ -564,6 +634,16 @@ function createAssignment(cfg: AsgCfg): void {
       syncProgressMaterialCosts(rep);
     }
   });
+  // portal reports the project manager rejected (not backed by survey sheets)
+  for (let i = 0; i < (cfg.rejected ?? 0); i++) {
+    const d = a1 - 3 - i * 5;
+    ins("progress_reports", {
+      assignment_id: asgId, stage_id: st.id, project_id: pid, report_date: off(d), quantity_done: primaryQtyReports ? r2(st.plan.qty * 0.012) : 0, cumulative_quantity: 0, percent_complete: r1(Math.max(0, pct - 2)),
+      manpower_count: Math.max(4, r0(crew * 0.6)), man_hours: Math.max(4, r0(crew * 0.6)) * 9, equipment_used: EQUIP[cat], work_done: `${cfg.scope}: progress claimed for the week.`,
+      issues: "Rejected by the project manager: measured quantities are below the claim. Resubmit with signed survey sheets.", delay_days: 0, delay_cause: null, delay_responsibility: "none", source: "portal", status: "rejected",
+      verified_by: managerId, verified_at: off(d + 1) + " 16:00:00", created_at: off(d) + " 17:00:00",
+    });
+  }
   // stage status/dates
   const sts = cfg.stageStatus ?? (pct >= 100 ? "completed" : stalls.some((s) => s.to >= -40) ? "delayed" : "in_progress");
   if (cfg.kind === "primary" || !db.prepare("SELECT actual_start FROM stages WHERE id=?").get(st.id)) {
@@ -600,9 +680,22 @@ function createAssignment(cfg: AsgCfg): void {
       source: status === "active" && cfg.portal !== false && k % 2 === 0 ? "portal" : "internal", notes: statusI === "rejected" ? "Rejected: claimed quantities exceed verified progress." : cfg.overclaim && cfg.overclaim > 1.1 ? "Claim exceeds verified progress; certified at measured quantities." : null,
       created_at: off(cut) + " 12:00:00",
     });
-    if (k === 0) saveSeedFile("invoice", invId, "Invoice", `${code}-INV-01.txt`, `Demo invoice ${code}-INV-01\nAmount: ${claimed}`, U[5], off(cut));
     syncInvoiceCost(invId);
   });
+  if (cfg.cpi) {
+    // over-/under-certification story: certified invoices = earned value / target CPI
+    const invs = q<any>("SELECT * FROM sub_invoices WHERE assignment_id=? AND status IN ('certified','approved','paid')", asgId);
+    const sum = invs.reduce((x: number, i: any) => x + i.certified_amount, 0);
+    const earned = cv * (complete ? 1 : asgPct(0) / 100); // verified progress only
+    if (sum > 0) {
+      const f = earned / cfg.cpi / sum;
+      for (const i of invs) {
+        const c = r0(i.certified_amount * f), ret = r0(c * ((cfg.retention ?? 5) / 100)), adv = r0(c * ((cfg.advance ?? 10) / 100)), net = c - ret - adv;
+        db.prepare("UPDATE sub_invoices SET certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=?, claimed_amount=MAX(claimed_amount, ?), paid_amount=? WHERE id=?").run(c, ret, adv, net, c, i.status === "paid" ? net : 0, i.id);
+        syncInvoiceCost(i.id);
+      }
+    }
+  }
 
   // ---- certificates
   const mkCert = (type: string, st2: string, pctC: number, date: number, src = "internal", remarks = "") => {
@@ -625,7 +718,7 @@ const P1A: AsgCfg[] = [
   { project: P1, stageIdx: 1, sub: SC_DESERT, kind: "primary", a0: -188, a1: -118, pct: 100, scope: "Earthworks, sub-grade preparation and widening", stalls: [R2(-150, -144, "weather", "Sandstorm – works suspended")] },
   { project: P1, stageIdx: 2, sub: SC_ASPHALT, kind: "primary", a0: -132, a1: -60, pct: 100, scope: "Base course and asphalt paving", stalls: [R2(-100, -95, "company", "Late approval of asphalt mix design")] },
   { project: P1, stageIdx: 3, sub: SC_ASPHALT, kind: "primary", a0: -74, a1: -8, pct: 100, scope: "Base course and asphalt paving", ccType: ["draft"] },
-  { project: P1, stageIdx: 4, sub: SC_ASPHALT, kind: "primary", a0: -18, a1: 0, pct: 31, scope: "Base course and asphalt paving", pendingLast: 1, retention: 7.5 },
+  { project: P1, stageIdx: 4, sub: SC_ASPHALT, kind: "primary", a0: -18, a1: 0, pct: 31, scope: "Base course and asphalt paving", pendingLast: 1, retention: 7.5, rejected: 1 },
   { project: P1, stageIdx: 4, sub: SC_BLUE, kind: "secondary", a0: -16, a1: 0, pct: 30, scope: "Survey, density testing and QA/QC", lumpsum: true, retention: 0, advance: 0 },
   { project: P1, stageIdx: 5, sub: SC_DESERT, kind: "draft", scope: "Earthworks, sub-grade preparation and widening" },
 ];
@@ -640,25 +733,31 @@ const P2A_: AsgCfg[] = [
     stalls: [R2(-120, -98, "subcontractor", "Crew redeployed to another client site"), R2(-60, -40, "subcontractor", "Ducts not ordered on time – material shortage")] },
   { project: P2, stageIdx: 3, sub: SC_GULF, kind: "primary", a0: -95, a1: 0, pct: 30, cvFactor: 0.66, scope: "Trenching, duct laying and reinstatement", overclaim: 1.2, crew: 18,
     stalls: [R2(-70, -45, "subcontractor", "Insufficient supervision; rework of 1.2 km of failed reinstatement")] },
-  { project: P2, stageIdx: 4, sub: SC_FALCON, kind: "draft", scope: "Trenching, duct laying, fibre pulling and splicing" },
+  // the failing subcontractor was terminated on the last section; Falcon took it over and is ahead of plan
+  { project: P2, stageIdx: 4, sub: SC_GULF, kind: "primary", a0: -62, a1: -28, pct: 9, status: "terminated", cvFactor: 0.5, crew: 14, scope: "Trenching, duct laying and reinstatement",
+    stalls: [R2(-50, -30, "subcontractor", "Crew not mobilised; contract terminated for default")] },
+  { project: P2, stageIdx: 4, sub: SC_FALCON, kind: "primary", a0: -50, a1: 0, pct: 62, pendingLast: 1, rejected: 1, scope: "Trenching, duct laying, fibre pulling and splicing" },
 ];
 P2A_.forEach(createAssignment);
 // ---- P3 (delayed by client / authority)
 const P3A: AsgCfg[] = [
   { project: P3, stageIdx: 0, sub: SC_WASL, kind: "primary", a0: -178, a1: -80, pct: 100, scope: "Pipe laying, jointing and backfill",
     stalls: [R2(-150, -125, "authority", "NOC for road crossing pending from Road Authority"), R2(-110, -95, "client", "Late site handover of sector 1")] },
-  { project: P3, stageIdx: 1, sub: SC_WASL, kind: "primary", a0: -120, a1: 0, pct: 60, scope: "Pipe laying, jointing and backfill", pendingLast: 1,
+  { project: P3, stageIdx: 1, sub: SC_WASL, kind: "primary", a0: -120, a1: 0, pct: 60, scope: "Pipe laying, jointing and backfill", pendingLast: 1, cpi: 0.93, rejected: 1,
     stalls: [R2(-95, -60, "authority", "Road Authority NOC for crossing C2 not issued"), R2(-50, -32, "client", "Client design change at valve chamber VC-3"), R2(-20, -14, "utility_clash", "Existing telecom duct bank clash at CH 5+100")] },
-  { project: P3, stageIdx: 1, sub: SC_SAHARA, kind: "secondary", a0: -90, a1: 0, pct: 55, scope: "Thrust boring and shoring for road crossings", lumpsum: true, advance: 15 },
-  { project: P3, stageIdx: 2, sub: SC_WASL, kind: "primary", a0: -40, a1: 0, pct: 9, scope: "Pipe laying, jointing and backfill", stalls: [R2(-30, -14, "authority", "Permit for night works not yet issued")] },
+  { project: P3, stageIdx: 1, sub: SC_SAHARA, kind: "secondary", a0: -90, a1: 0, pct: 55, scope: "Thrust boring and shoring for road crossings", lumpsum: true, advance: 15, cpi: 0.87 },
+  { project: P3, stageIdx: 2, sub: SC_WASL, kind: "primary", a0: -52, a1: 0, pct: 32, scope: "Pipe laying, jointing and backfill", stalls: [R2(-30, -14, "authority", "Permit for night works not yet issued")] },
+  { project: P3, stageIdx: 2, sub: SC_BLUE, kind: "secondary", qtyShare: 0.2, a0: -52, a1: -9, pct: 88, scope: "Survey, as-built and pressure-test witnessing", retention: 0, advance: 0 },
   { project: P3, stageIdx: 3, sub: SC_WASL, kind: "draft", scope: "Pipe laying, jointing and backfill" },
 ];
 P3A.forEach(createAssignment);
 // ---- P4 (slightly behind)
 const P4A: AsgCfg[] = [
-  { project: P4, stageIdx: 0, sub: SC_SAHARA, kind: "primary", a0: -70, a1: 0, pct: 85, scope: "Utility corridor excavation, ducting and backfill", pendingLast: 2, stalls: [R2(-45, -38, "client", "Awaiting client approval of revised utility layout")] },
+  { project: P4, stageIdx: 0, sub: SC_SAHARA, kind: "primary", a0: -70, a1: 0, pct: 85, scope: "Utility corridor excavation, ducting and backfill", pendingLast: 3, cpi: 0.95,
+    stalls: [R2(-45, -38, "client", "Awaiting client approval of revised utility layout"), R2(-26, -22, "weather", "Shamal dust storm – excavation suspended")] },
   { project: P4, stageIdx: 0, sub: SC_BLUE, kind: "secondary", a0: -60, a1: 0, pct: 70, scope: "Survey and materials testing", lumpsum: true, retention: 0, advance: 0 },
-  { project: P4, stageIdx: 1, sub: SC_DESERT, kind: "draft", scope: "Earthworks and grading for logistics yard" },
+  { project: P4, stageIdx: 1, sub: SC_DESERT, kind: "primary", a0: -22, a1: 0, pct: 26, scope: "Earthworks and grading for logistics yard" },
+  { project: P4, stageIdx: 2, sub: SC_ASPHALT, kind: "draft", scope: "Access road base course and asphalt" },
 ];
 P4A.forEach(createAssignment);
 // ---- Sub-project A
@@ -667,10 +766,42 @@ const PAA: AsgCfg[] = [
   { project: P2A, stageIdx: 1, sub: SC_FALCON, kind: "primary", a0: -66, a1: 0, pct: 45, scope: "Spur ducts and handholes" },
 ];
 PAA.forEach(createAssignment);
+// ---- P7 (amber): mix of completed, behind, at risk, on track and suspended work
+const P7A: AsgCfg[] = [
+  { project: P7, stageIdx: 0, sub: SC_DESERT, kind: "primary", a0: -168, a1: -98, pct: 100, scope: "Milling, earthworks and sub-base reconstruction" },
+  { project: P7, stageIdx: 1, sub: SC_DESERT, kind: "primary", a0: -108, a1: 0, pct: 92, cpi: 0.82, pendingLast: 1, scope: "Milling, earthworks and sub-base reconstruction",
+    stalls: [R2(-92, -78, "utility_clash", "ADDC 11 kV cable not on as-built drawings – excavation suspended")] },
+  { project: P7, stageIdx: 2, sub: SC_ASPHALT, kind: "primary", a0: -50, a1: 0, pct: 62, scope: "Binder and wearing course paving",
+    stalls: [R2(-30, -23, "other", "National Day parade – lane closures restricted works")] },
+  { project: P7, stageIdx: 2, sub: SC_BLUE, kind: "secondary", qtyShare: 0.2, a0: -50, a1: -9, pct: 86, scope: "Density testing, core sampling and QA/QC", retention: 0, advance: 0 },
+  { project: P7, stageIdx: 2, sub: SC_MARINA, kind: "secondary", qtyShare: 0.15, a0: -50, a1: -14, pct: 40, status: "suspended", tag: "p7-marina", scope: "Kerb planters, median and verge landscaping, irrigation", retention: 0, advance: 0,
+    stalls: [R2(-22, -14, "subcontractor", "Trade licence expired – site closed by the authority")] },
+  { project: P7, stageIdx: 3, sub: SC_BLUE, kind: "draft", scope: "Survey and as-built drawings for Section D" },
+];
+P7A.forEach(createAssignment);
+// Section D waits for the utility diversion approval (no work yet)
+db.prepare("UPDATE stages SET status = 'on_hold' WHERE id = ?").run(stageIds[P7][3]);
+// ---- P8 (green): ahead of plan, chambers contractor suspended after an HSE stop-work order
+const P8A: AsgCfg[] = [
+  { project: P8, stageIdx: 0, sub: SC_FALCON, kind: "primary", a0: -118, a1: -45, pct: 100, scope: "Duct bank, handholes and microduct installation" },
+  { project: P8, stageIdx: 1, sub: SC_FALCON, kind: "primary", a0: -52, a1: 0, pct: 80, pendingLast: 1, rejected: 1, scope: "Duct bank, handholes and microduct installation" },
+  { project: P8, stageIdx: 1, sub: SC_SAHARA, kind: "secondary", qtyShare: 0.15, a0: -50, a1: -14, pct: 45, status: "suspended", tag: "p8-sahara", scope: "Chambers, manholes and civil reinstatement", retention: 0, advance: 0,
+    stalls: [R2(-22, -14, "company", "HSE stop-work order after crane near-miss")] },
+];
+P8A.forEach(createAssignment);
+// ---- P9 (completed) and P10 (closed): finished history
+const P9A: AsgCfg[] = [
+  { project: P9, stageIdx: 0, sub: SC_WASL, kind: "primary", a0: -418, a1: -235, pct: 100, scope: "Pipe laying, jointing and backfill" },
+  { project: P9, stageIdx: 1, sub: SC_WASL, kind: "primary", a0: -255, a1: -75, pct: 100, scope: "Pipe laying, jointing and backfill", stalls: [R2(-200, -190, "authority", "Road closure permit for the Al Quoz crossing delayed")] },
+  { project: P9, stageIdx: 1, sub: SC_BLUE, kind: "secondary", lumpsum: true, a0: -200, a1: -75, pct: 100, scope: "Hydrotest witnessing and as-built survey", retention: 0, advance: 0 },
+  { project: P10, stageIdx: 0, sub: SC_DESERT, kind: "primary", a0: -558, a1: -395, pct: 100, scope: "Sub-grade and base course for the container stack area" },
+  { project: P10, stageIdx: 1, sub: SC_ASPHALT, kind: "primary", a0: -415, a1: -245, pct: 100, scope: "Heavy-duty asphalt paving and line marking", stalls: [R2(-330, -322, "weather", "Extreme heat – paving restricted to night shifts")] },
+];
+P9A.forEach(createAssignment);
 console.log(`Seeded ${asgIds.length} assignments`);
 
 /* ---------------------------------------------------------------- manual costs (calibrated to the story CPIs) */
-const CPI_TARGET: Record<number, number> = { [P1]: 1.03, [P2]: 0.74, [P3]: 0.97, [P4]: 0.94, [P2A]: 1.0, [P2B]: 1.0 };
+const CPI_TARGET: Record<number, number> = { [P1]: 1.03, [P2]: 0.74, [P3]: 0.97, [P4]: 0.89, [P2A]: 1.0, [P2B]: 1.0, [P7]: 0.9, [P8]: 1.04, [P9]: 1.03, [P10]: 1.01, [P11]: 1.0, [P12]: 1.0 };
 for (const pid of projectIds) {
   const p = q1<any>("SELECT start_date s, manager_id m FROM projects WHERE id=?", pid)!;
   const m = getProjectMetrics(pid);
@@ -717,14 +848,27 @@ const ISSUES: IssueCfg[] = [
   { p: P3, stage: 2, asg: null, title: "Night works permit not issued", desc: "Permit required for work near the highway interchange.", resp: "authority", days: 10, cost: 30000, status: "open", raised: -30 },
   { p: P4, stage: 0, asg: null, title: "Utility layout re-approval", desc: "Client requested a revised utility corridor alignment.", resp: "client", days: 5, cost: 25000, status: "closed", raised: -46, resolved: -38 },
   { p: P4, stage: 1, asg: null, title: "Logistics yard drainage design pending", desc: "Awaiting client drainage design for Zone B.", resp: "client", days: 0, cost: 0, status: "open", raised: -8 },
+  { p: P4, stage: 0, asg: null, title: "Shamal dust storm – excavation suspended", desc: "Visibility below 50 m for three days; excavation and ducting stopped.", resp: "weather", days: 3, cost: 0, status: "closed", raised: -26, resolved: -22 },
+  { p: P7, stage: 1, asg: null, title: "ADDC 11 kV cable not on as-built drawings", desc: "Live 11 kV cable found at 0.4 m depth; excavation stopped until the utility isolated and diverted it.", resp: "utility_clash", days: 14, cost: 38000, status: "closed", raised: -92, resolved: -78 },
+  { p: P7, stage: 1, asg: null, title: "Base course density failures at CH 3+250", desc: "Density below 98% over 180 m; recompaction at the subcontractor's cost.", resp: "subcontractor", days: 4, cost: 26000, status: "open", raised: -20 },
+  { p: P7, stage: 2, asg: null, title: "National Day parade lane closures", desc: "Municipality restricted works on three weekends along the corridor.", resp: "other", days: 7, cost: 0, status: "mitigating", raised: -30 },
+  { p: P7, stage: 2, asg: "tag:p7-marina", title: "Landscaping subcontractor trade licence expired", desc: "Authority closed the planting site; the assignment is suspended until the licence is renewed.", resp: "subcontractor", days: 8, cost: 12000, status: "open", raised: -14 },
+  { p: P7, stage: 3, asg: null, title: "Section D waiting for utility diversion approval", desc: "Stage on hold until the water authority approves the diversion of a 300 mm main.", resp: "authority", days: 0, cost: 0, status: "open", raised: -6 },
+  { p: P8, stage: 0, asg: null, title: "Handhole spacing clash with another operator's duct", desc: "Another telecom operator's duct occupies the planned handhole positions; layout shifted by 12 m.", resp: "utility_clash", days: 3, cost: 9000, status: "closed", raised: -100, resolved: -95 },
+  { p: P8, stage: 1, asg: "tag:p8-sahara", title: "HSE stop-work order – crane near-miss at chamber C-14", desc: "Authority and client HSE stopped chamber works pending investigation; the civil crew is stood down.", resp: "company", days: 6, cost: 22000, status: "mitigating", raised: -22 },
+  { p: P9, stage: 1, asg: null, title: "Road closure permit for the Al Quoz crossing", desc: "Permit for the crossing took 9 days longer than programmed.", resp: "authority", days: 9, cost: 34000, status: "closed", raised: -200, resolved: -188 },
+  { p: P10, stage: 1, asg: null, title: "Extreme heat – paving moved to night shift", desc: "Surface temperature limits forced night-only paving for a week.", resp: "weather", days: 6, cost: 18000, status: "closed", raised: -330, resolved: -322 },
 ];
 // resolve assignment codes by looking up the Gulf assignments in creation order
 const gulf = asgIds.filter((a) => a.sub === SC_GULF).map((a) => a.id);
 ISSUES.forEach((i) => {
-  const asg = i.asg === "SC-009" ? gulf[0] : i.asg === "SC-010" ? gulf[1] : i.asg === "SC-011" ? gulf[2] : i.asg ? asgByCode(i.asg) : null;
+  const asg = i.asg?.startsWith("tag:") ? (asgIds.find((a) => a.cfg.tag === i.asg!.slice(4))?.id ?? null) : i.asg === "SC-009" ? gulf[0] : i.asg === "SC-010" ? gulf[1] : i.asg === "SC-011" ? gulf[2] : i.asg ? asgByCode(i.asg) : null;
   const iid = ins("issues", { project_id: i.p, stage_id: i.stage !== null ? stageIds[i.p][i.stage] : null, assignment_id: asg, title: i.title, description: i.desc, responsibility: i.resp, impact_days: i.days, impact_cost: i.cost, status: i.status, raised_on: off(i.raised), resolved_on: i.resolved !== undefined ? off(i.resolved) : null });
   void iid;
 });
+
+/* ---------------------------------------------------------------- invoice documents: lines, VAT, certification, people (attachment files are written at the end) */
+const invoiceDemo = seedInvoiceDetails(db, { today: TODAY, users: { clerk: U[8], finance: U[5], finance2: U[12] }, syncCost: syncInvoiceCost });
 
 /* ---------------------------------------------------------------- project documents */
 projectIds.slice(0, 4).forEach((pid, i) => {
@@ -739,7 +883,59 @@ tenderIds.forEach((tid, i) => {
 installDefaultWorkflows(db, U[1]);
 seedApprovalDemo(db, { sara: U[4], daniel: U[7], imran: U[5], mariam: U[12], rahul: U[3], layla: U[2], omar: U[1], hamdan: U[11] });
 
+/* ---------------------------------------------------------------- subcontractor login portal (PORTAL_SPEC section 4) */
+const portalDemo = seedPortal(db, { today: TODAY, uploads: UPLOADS, admin: U[1], clerk: U[8] });
+
+/* ---------------------------------------------------------------- recent audit trail + activity feed */
+{
+  const stamp = (daysAgo: number, hh: number, mm = 0) => { const d = new Date(Date.now() - daysAgo * 86_400_000); d.setUTCHours(hh, mm, 0, 0); return d; };
+  const iso = (d: Date) => d.toISOString();
+  const sql = (d: Date) => d.toISOString().replace("T", " ").slice(0, 19);
+  const IP = ["10.20.4.11", "10.20.4.23", "10.20.5.8", "10.20.6.40", "82.114.37.9"];
+  const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 Safari/605.1.15";
+  const email = (uid: number) => (q1<any>("SELECT email e FROM users WHERE id = ?", uid)!).e as string;
+  const uname = (uid: number) => (q1<any>("SELECT name n FROM users WHERE id = ?", uid)!).n as string;
+  const ev = (when: Date, event: string, uid: number | null, detail: string | null, ip = IP[0], mail: string | null = null) =>
+    ins("auth_events", { user_id: uid, email: mail ?? (uid ? email(uid) : null), event, ip, user_agent: UA, detail, created_at: iso(when) });
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((uid, k) => {
+    ev(stamp(k % 5, 4 + (k % 4), 10 + k), "login_success", U[uid], null, IP[k % 4]);
+    if (k % 3 === 0) ev(stamp(k % 5, 13, 30 + k), "logout", U[uid], null, IP[k % 4]);
+  });
+  ev(stamp(0, 5, 52), "login_success", U[1], "Remembered session", IP[0]);
+  ev(stamp(1, 7, 41), "login_failed", null, "Invalid email or password", IP[4], "j.smith@unknown-mail.example");
+  ev(stamp(1, 8, 2), "login_failed", U[9], "Invalid email or password", IP[2]);
+  ev(stamp(1, 8, 3), "login_failed", U[9], "Invalid email or password", IP[2]);
+  ev(stamp(1, 8, 5), "locked", U[9], "Account locked after 5 failed sign-in attempts", IP[2]);
+  ev(stamp(1, 9, 20), "user_unlocked", U[1], `Unlocked ${uname(U[9])}`, IP[0]);
+  ev(stamp(2, 10, 5), "password_changed", U[7], "Password changed by the user", IP[1]);
+  ev(stamp(2, 11, 15), "password_reset", U[1], `Temporary password issued to ${uname(U[8])}`, IP[0]);
+  ev(stamp(3, 9, 30), "user_created", U[1], `Created user ${uname(U[11])}`, IP[0]);
+  ev(stamp(3, 9, 34), "role_changed", U[1], `${uname(U[11])}: role set to Management`, IP[0]);
+  ev(stamp(3, 9, 40), "user_created", U[1], `Created user ${uname(U[12])}`, IP[0]);
+  ev(stamp(4, 14, 12), "permissions_changed", U[1], "Tender approve permission granted to the Technical, Finance and Operations heads", IP[0]);
+  ev(stamp(4, 15, 3), "user_updated", U[1], `Updated profile of ${uname(U[6])} (department and job title)`, IP[0]);
+  ev(stamp(5, 8, 45), "user_disabled", U[1], `Disabled ${uname(U[10])} during a leave of absence`, IP[0]);
+  ev(stamp(4, 8, 10), "user_enabled", U[1], `Re-enabled ${uname(U[10])}`, IP[0]);
+  ev(stamp(2, 16, 25), "session_revoked", U[1], "Revoked an idle session of Daniel Cruz", IP[0]);
+
+  // business activity in the last days (shows in the audit log and the entity timelines)
+  const act = (when: Date, type: string, id: number, action: string, msg: string, uid: number | null) =>
+    ins("activity_log", { entity_type: type, entity_id: id, action, message: msg, user_id: uid, created_at: sql(when) });
+  const recentReps = q<any>("SELECT r.id, r.project_id, r.assignment_id, r.report_date FROM progress_reports r WHERE r.status = 'verified' ORDER BY r.report_date DESC, r.id DESC LIMIT 6");
+  recentReps.forEach((r, i) => act(stamp(i % 3, 7 + i, 20 + i), "project", r.project_id, "progress", `Progress report of ${r.report_date} verified`, q1<any>("SELECT manager_id m FROM projects WHERE id = ?", r.project_id)!.m));
+  q<any>("SELECT id, invoice_no, status, project_id FROM sub_invoices WHERE status IN ('certified','under_review','submitted') ORDER BY id DESC LIMIT 5")
+    .forEach((i, k) => act(stamp(k % 3, 9 + k, 5 * k), "invoice", i.id, "status", `Invoice ${i.invoice_no} ${i.status.replace("_", " ")}`, U[5]));
+  q<any>("SELECT id, title FROM issues WHERE status <> 'closed' ORDER BY raised_on DESC, id DESC LIMIT 4")
+    .forEach((i, k) => act(stamp(k % 2, 8 + k, 15), "project", q1<any>("SELECT project_id p FROM issues WHERE id = ?", i.id)!.p, "issue", `Issue updated: ${i.title}`, U[2]));
+  q<any>("SELECT id, code, status FROM tenders WHERE status IN ('negotiation','submitted','under_review','in_preparation') ORDER BY id DESC LIMIT 4")
+    .forEach((t, k) => act(stamp(k % 3, 10 + k, 40), "tender", t.id, "status", `Tender ${t.code} reviewed (${t.status.replace("_", " ")})`, U[3]));
+  q<any>("SELECT id, name FROM subcontractors WHERE status IN ('onboarding','prospect') LIMIT 2")
+    .forEach((s, k) => act(stamp(k, 12, 10), "subcontractor", s.id, "document", `Compliance document uploaded for ${s.name}`, U[8]));
+}
+
 /* ---------------------------------------------------------------- summary */
+async function finish() {
+const invoiceFiles = await seedInvoiceDocuments(db, { uploads: UPLOADS, users: { clerk: U[8] }, company: { name: "Al Noor Infrastructure LLC", address: "Office 1204, Al Moosa Tower 2, Sheikh Zayed Road, Dubai, United Arab Emirates", trn: "100234567800003" } });
 const count = (t: string) => (q1<any>(`SELECT COUNT(*) c FROM ${t}`)!).c;
 console.log("\nSeed summary:");
 for (const t of ["departments", "users", "clients", "tenders", "tender_sections", "tender_revisions", "budget_lines", "margin_changes", "tender_reviews", "negotiations", "loss_analyses", "projects", "stages", "project_budget_lines",
@@ -757,7 +953,12 @@ for (const pid of projectIds) {
 console.log("\nSubcontractor portal links (active assignments):");
 for (const a of q<any>("SELECT a.code, a.portal_token t, s.name sn, p.code pc FROM assignments a JOIN subcontractors s ON s.id=a.subcontractor_id JOIN projects p ON p.id=a.project_id WHERE a.portal_enabled=1 ORDER BY a.id"))
   console.log(`  ${a.code} ${a.pc} ${a.sn}: http://localhost:3100/portal/${a.t}`);
+console.log(`\nSubcontractor portal (login per company, password ${DEMO_PORTAL_PASSWORD} for every demo user; one user must change it, one is locked, one disabled):`);
+for (const p of portalDemo.slugs) console.log(`  ${p.sub.padEnd(36)} ${p.enabled ? `http://localhost:3100/p/${p.slug}  owner: ${p.owner}` : `/p/${p.slug}  (portal off)`}`);
 console.log("\nDemo logins (local demo only):");
 for (const u of q<any>("SELECT u.email, r.name role FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.id"))
   console.log(`  ${String(u.email).padEnd(30)} ${u.email === DEMO_ADMIN_EMAIL ? DEMO_ADMIN_PASSWORD : DEMO_USER_PASSWORD}   (${u.role})`);
+console.log(`\nInvoice documents: ${invoiceFiles} attachment files written. Demo invoices: showcase http://localhost:3100/invoices/${invoiceDemo.showcaseId}, long (multi-page) http://localhost:3100/invoices/${invoiceDemo.longId}`);
 console.log("\nDone.");
+}
+finish().catch((e) => { console.error(e); process.exit(1); });

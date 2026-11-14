@@ -105,7 +105,7 @@ export function ProgressTab({ project, stages, filters }: { project: ProjectRow;
         }>
         {reports.length === 0 ? <div className="p-4"><EmptyState title="No progress reports" /></div> : (
           <Table>
-            <THead><TR><TH>Date</TH><TH>Stage</TH><TH>Subcontract</TH><TH num>Qty (period / cum.)</TH><TH num>%</TH><TH num>Crew / hrs</TH><TH num>Delay</TH><TH>Source</TH><TH>Status</TH><TH className="w-44" /></TR></THead>
+            <THead><TR><TH>Date</TH><TH>Stage</TH><TH>Subcontract</TH><TH num>Qty (period / cum.)</TH><TH num>%</TH><TH num>Crew / hrs</TH><TH num>Delay</TH><TH>Source</TH><TH>Status</TH><TH className="w-64" /></TR></THead>
             <TBody>
               {reports.map((r) => (
                 <TR key={r.id} className={r.status === "submitted" ? "bg-amber-50/40" : ""}>
@@ -133,7 +133,7 @@ export function ProgressTab({ project, stages, filters }: { project: ProjectRow;
                     {r.status === "submitted" ? (
                       <div className="flex gap-1">
                         <form action={verifyProgressReport}><input type="hidden" name="id" value={r.id} /><Button type="submit" variant="success" size="sm"><Check size={13} className="mr-1" />Verify</Button></form>
-                        <form action={rejectProgressReport}><input type="hidden" name="id" value={r.id} /><Button type="submit" variant="danger" size="sm"><X size={13} className="mr-1" />Reject</Button></form>
+                        <form action={rejectProgressReport} className="flex items-center gap-1"><input type="hidden" name="id" value={r.id} /><input name="reason" placeholder="Reason (shown to subcontractor)" aria-label="Rejection reason" className="w-28 rounded-lg border border-line px-2 py-1 text-xs" /><Button type="submit" variant="danger" size="sm"><X size={13} className="mr-1" />Reject</Button></form>
                       </div>
                     ) : r.status === "rejected" ? (
                       <form action={verifyProgressReport}><input type="hidden" name="id" value={r.id} /><Button type="submit" variant="ghost" size="sm">Verify anyway</Button></form>

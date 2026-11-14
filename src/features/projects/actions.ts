@@ -12,6 +12,10 @@ import type { Assignment, Project, Stage, SubInvoice } from "@/lib/types";
 import { firstLine, lineLengthKm, measureGeometry, sliceLine } from "./geo";
 import { requireAnyPermission, requirePermission } from "@/lib/auth";
 import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
+import { DEFAULT_VAT_RATE, deductions, fromGross, fromSubtotal } from "@/features/invoices/calc";
+import { applyCertificationToLines, dueDate, getAssignmentBoq, getAssignmentFacts, insertInvoiceLines, lumpLine, parseInvoiceLines, previousCertified } from "@/features/invoices/lines";
+import { guard, type ActionResult } from "@/lib/action-result";
+import { readInvoiceUploads, saveInvoiceUploads } from "@/features/invoices/attachments";
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -409,10 +413,11 @@ async function setReportStatus(form: FormData, status: "verified" | "rejected"):
   if (!r) throw new Error("Report not found");
   const user = await getCurrentUser();
   db.transaction(() => {
-    db.prepare("UPDATE progress_reports SET status = ?, verified_by = ?, verified_at = CURRENT_TIMESTAMP WHERE id = ?").run(status, user.id || null, id);
+    const reason = status === "rejected" ? str(form, "reason") || null : null;
+    db.prepare("UPDATE progress_reports SET status = ?, verified_by = ?, verified_at = CURRENT_TIMESTAMP, reject_reason = ? WHERE id = ?").run(status, user.id || null, reason, id);
     syncProgressMaterialCosts(id);
   })();
-  await logActivity("progress", id, status, `Progress report ${r.report_date} ${status}`);
+  await logActivity("progress", id, status, `Progress report ${r.report_date} ${status}${status === "rejected" && str(form, "reason") ? `: ${str(form, "reason")}` : ""}`);
   await logActivity("project", r.project_id, "progress", `Progress report ${r.report_date} ${status}`);
   revalidatePath(`/projects/${r.project_id}/stages/${r.stage_id}`);
   refresh(r.project_id);
@@ -474,26 +479,50 @@ function terms(assignmentId: number): Assignment {
   return getDb().prepare("SELECT * FROM assignments WHERE id = ?").get(assignmentId) as Assignment;
 }
 
-export async function createInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "certify");
+export async function createInvoice(form: FormData): Promise<ActionResult> {
+  return guard(async () => {
+  const user = await requirePermission("invoices", "certify");
   const projectId = Number(form.get("project_id"));
   const assignmentId = idOrNull(form, "assignment_id");
   if (!assignmentId) throw new Error("Subcontract is required");
   const a = terms(assignmentId);
   if (!a || a.project_id !== projectId) throw new Error("Subcontract does not belong to this project");
-  const claimed = num(form, "claimed_amount");
-  if (!(claimed > 0)) throw new Error("Claimed amount must be greater than zero");
+  const facts = getAssignmentFacts(assignmentId)!;
+  const fail = (m: string): never => { throw new Error(m); };
+  // Lines (line editor) or a lump claim (gross amount incl. VAT). Server computes every total.
+  const parsed = parseInvoiceLines(form, getAssignmentBoq(assignmentId), { allowCustom: true, fail });
+  let subtotal: number, vat: number, gross: number;
+  if (parsed.length) {
+    ({ subtotal, vat, gross } = fromSubtotal(parsed.reduce((t, l) => t + l.amount, 0), DEFAULT_VAT_RATE));
+  } else {
+    const claimed = num(form, "claimed_amount");
+    if (!(claimed > 0)) throw new Error("Enter the line quantities or a claimed amount greater than zero");
+    ({ subtotal, vat, gross } = fromGross(claimed, DEFAULT_VAT_RATE));
+  }
+  const uploads = readInvoiceUploads(form, { requireTaxInvoice: false, fail });
   const db = getDb();
   const n = (db.prepare("SELECT COUNT(*) c FROM sub_invoices WHERE assignment_id = ?").get(assignmentId) as { c: number }).c + 1;
   const no = strOrNull(form, "invoice_no") ?? `${a.code}-INV-${String(n).padStart(2, "0")}`;
-  const id = Number(db.prepare(
-    `INSERT INTO sub_invoices(assignment_id, project_id, invoice_no, invoice_date, period_from, period_to, claimed_amount, claimed_percent, status, source, notes)
-     VALUES (?,?,?,?,?,?,?,?, 'submitted', 'internal', ?)`).run(
-    assignmentId, projectId, no, dateOrNull(form, "invoice_date") ?? todayISO(), dateOrNull(form, "period_from"), dateOrNull(form, "period_to"),
-    claimed, a.contract_value ? r2((claimed / a.contract_value) * 100) : 0, strOrNull(form, "notes")).lastInsertRowid);
-  await saveUploadsFromForm(form, "files", "invoice", id, "Invoice");
-  await logActivity("invoice", id, "created", `Invoice ${no} recorded (${claimed})`);
+  const date = dateOrNull(form, "invoice_date") ?? todayISO();
+  const lineRows = parsed.length ? parsed : [lumpLine(facts, subtotal, getAssignmentBoq(assignmentId)[0]?.prev_qty ?? 0)];
+  const id = db.transaction(() => {
+    const newId = Number(db.prepare(
+      `INSERT INTO sub_invoices(assignment_id, project_id, invoice_no, invoice_date, period_from, period_to, claimed_amount, claimed_percent, status, source, notes,
+         sub_invoice_ref, currency, vat_rate, subtotal, vat_amount, gross_amount, retention_percent, advance_recovery_percent, previous_certified,
+         submitted_by_name, submitted_by_email, submitted_at, due_date)
+       VALUES (?,?,?,?,?,?,?,?, 'submitted', 'internal', ?, ?,?,?,?,?,?,?,?,?, ?,?,?,?)`).run(
+      assignmentId, projectId, no, date, dateOrNull(form, "period_from"), dateOrNull(form, "period_to"),
+      gross, a.contract_value ? r2((subtotal / a.contract_value) * 100) : 0, strOrNull(form, "notes"),
+      strOrNull(form, "sub_invoice_ref"), getSetting("currency", "AED"), DEFAULT_VAT_RATE, subtotal, vat, gross, a.retention_pct || 0, a.advance_pct || 0, previousCertified(assignmentId),
+      user.name, user.email, new Date().toISOString(), dueDate(date, a.payment_days)).lastInsertRowid);
+    insertInvoiceLines(db, newId, lineRows);
+    return newId;
+  })();
+  await saveInvoiceUploads(id, uploads);
+  await saveUploadsFromForm(form, "files", "sub_invoice", id, "other");
+  await logActivity("invoice", id, "created", `Invoice ${no} recorded (${gross})`);
   refresh(projectId);
+  });
 }
 
 export async function startInvoiceReview(form: FormData): Promise<void> {
@@ -501,9 +530,11 @@ export async function startInvoiceReview(form: FormData): Promise<void> {
   const id = Number(form.get("id"));
   const i = invoice(id);
   if (i.status !== "submitted") throw new Error("Only submitted invoices can go under review");
-  getDb().prepare("UPDATE sub_invoices SET status='under_review' WHERE id=?").run(id);
+  const reviewer = await getCurrentUser();
+  getDb().prepare("UPDATE sub_invoices SET status='under_review', reviewed_by=? WHERE id=?").run(reviewer.id || null, id);
   await logActivity("invoice", id, "review", `Invoice ${i.invoice_no} under review`);
   refresh(i.project_id);
+  revalidatePath(`/invoices/${id}`);
 }
 
 /** Certify: set certified amount, auto-compute retention & advance recovery from assignment terms. */
@@ -516,20 +547,20 @@ export async function certifyInvoice(form: FormData): Promise<void> {
   if (certified < 0) throw new Error("Certified amount cannot be negative");
   if (certified > i.claimed_amount * 1.0001 && i.claimed_amount > 0) throw new Error("Certified amount exceeds the claimed amount");
   const a = terms(i.assignment_id);
-  const retention = r2((certified * (a.retention_pct || 0)) / 100);
-  const advance = r2((certified * (a.advance_pct || 0)) / 100);
-  const net = r2(certified - retention - advance);
+  const { retention, advance, net } = deductions(certified, a.retention_pct, a.advance_pct);
   const db = getDb();
   const user = await getCurrentUser();
   db.transaction(() => {
     withdrawOpenRequest("sub_invoice", id, user.id);
-    db.prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=? WHERE id=?").run(certified, retention, advance, net, id);
+    db.prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=?, certified_by=?, certified_at=? WHERE id=?")
+      .run(certified, retention, advance, net, user.id || null, new Date().toISOString(), id);
+    applyCertificationToLines(db, id, fromGross(certified, i.vat_rate || DEFAULT_VAT_RATE).subtotal);
     syncInvoiceCost(id);
     // Certification raises the multi-level sub_invoice approval; the invoice becomes approved (and cost is posted) on final approval.
     submitForApproval("sub_invoice", id, { userId: user.id });
   })();
   await logActivity("invoice", id, "certified", `Invoice ${i.invoice_no} certified ${certified} (retention ${retention}, advance recovery ${advance}, net ${net})`);
-  refresh(i.project_id); revalidatePath("/", "layout");
+  refresh(i.project_id); revalidatePath("/", "layout"); revalidatePath(`/invoices/${id}`);
 }
 
 export async function approveInvoice(form: FormData): Promise<void> {
@@ -553,7 +584,7 @@ export async function payInvoice(form: FormData): Promise<void> {
   if (!(amount > 0)) throw new Error("Paid amount must be greater than zero");
   const user = await getCurrentUser();
   if (hasOpenRequest("invoice_payment", id)) throw new Error("Payment approval is already pending");
-  submitForApproval("invoice_payment", id, { userId: user.id, payload: { paid_amount: amount, paid_date: dateOrNull(form, "paid_date") ?? todayISO() } });
+  submitForApproval("invoice_payment", id, { userId: user.id, payload: { paid_amount: amount, paid_date: dateOrNull(form, "paid_date") ?? todayISO(), payment_method: strOrNull(form, "payment_method") ?? "Bank transfer", payment_ref: strOrNull(form, "payment_ref") } });
   await logActivity("invoice", id, "approval", `Payment of invoice ${i.invoice_no} (${amount}) submitted for approval`);
   refresh(i.project_id); revalidatePath("/", "layout");
 }

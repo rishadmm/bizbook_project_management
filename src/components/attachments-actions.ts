@@ -11,7 +11,7 @@ import type { Attachment, EntityType } from "@/lib/types";
 const ENTITY_PERMISSION: Record<EntityType, [ModuleKey, string]> = {
   tender: ["tenders", "edit"], revision: ["tenders", "edit"], project: ["projects", "edit"], stage: ["projects", "edit"],
   subcontractor: ["subcontractors", "edit"], assignment: ["subcontractors", "edit"], progress: ["progress", "create"],
-  invoice: ["invoices", "certify"], certificate: ["certificates", "issue"], loss: ["lost_analysis", "edit"],
+  invoice: ["invoices", "certify"], sub_invoice: ["invoices", "certify"], certificate: ["certificates", "issue"], loss: ["lost_analysis", "edit"], issue: ["projects", "edit"],
 };
 async function guard(entityType: EntityType) {
   const p = ENTITY_PERMISSION[entityType];

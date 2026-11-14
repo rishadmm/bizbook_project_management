@@ -1,4 +1,4 @@
-import { CheckCircle2, LinkIcon, TriangleAlert } from "lucide-react";
+import { CheckCircle2, LinkIcon, LogIn, TriangleAlert } from "lucide-react";
 import { Badge, Card, CardSection, Field, Input, ProgressBar, Select, StatusBadge, Textarea } from "@/components/ui";
 import { ProjectMapLazy } from "@/components/map/ProjectMap";
 import type { MapFeature } from "@/components/map/types";
@@ -7,9 +7,13 @@ import { getAssignmentProgress } from "@/lib/metrics";
 import { statusHex, statusLabel, statusOptions } from "@/lib/status";
 import { extractGeometries } from "@/features/dashboard/geo";
 import { portalCertificates, portalInvoices, portalProgressReports, resolvePortal } from "@/features/portal/queries";
-import { requestPortalCertificate, submitPortalInvoice, submitProgressReport } from "@/features/portal/actions";
+import { requestPortalCertificate, submitProgressReport } from "@/features/portal/actions";
 import { LineRows } from "@/features/portal/components/LineRows";
 import { SubmitButton } from "@/features/portal/components/SubmitButton";
+import PortalInvoiceForm from "@/features/portal/components/PortalInvoiceForm";
+import { DEFAULT_VAT_RATE } from "@/features/invoices/calc";
+import { getAssignmentBoq } from "@/features/invoices/lines";
+import { getDb, getSetting } from "@/lib/db";
 import { BRAND, MAP_COLORS } from "@/lib/theme";
 
 type SP = { sent?: string; error?: string };
@@ -40,9 +44,17 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   }));
   const reports = portalProgressReports(a.id), invoices = portalInvoices(a.id), certs = portalCertificates(a.id);
   const today = todayISO();
+  // The company now has a full login portal: point the quick-update link at it.
+  const fullPortal = !!subcontractor.portal_slug && subcontractor.portal_enabled === 1
+    && (getDb().prepare("SELECT COUNT(*) c FROM portal_users WHERE subcontractor_id = ? AND status = 'active'").get(subcontractor.id) as { c: number }).c > 0;
 
   return (
     <div className="space-y-5">
+      {fullPortal && (
+        <a href={`/p/${subcontractor.portal_slug}/login`} data-testid="full-portal-banner" className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary-50 p-3 text-sm font-semibold text-slate-700 hover:bg-primary-100">
+          <LogIn size={18} className="shrink-0 text-primary" /><span className="flex-1">Your company now has a full portal with progress history, invoices, payments and more.</span><span className="rounded-md bg-primary px-3 py-1 text-xs font-bold text-white">Sign in</span>
+        </a>
+      )}
       {sp.sent && SENT[sp.sent] && (
         <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"><CheckCircle2 size={18} className="mt-0.5 shrink-0" />{SENT[sp.sent]}</div>
       )}
@@ -100,21 +112,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
         </form>
       </CardSection>
 
-      <CardSection title="Submit invoice">
-        <form action={submitPortalInvoice} className="space-y-4">
-          <input type="hidden" name="token" value={token} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Invoice no."><Input name="invoice_no" required /></Field>
-            <Field label="Invoice date"><Input type="date" name="invoice_date" defaultValue={today} required /></Field>
-            <Field label="Period from"><Input type="date" name="period_from" /></Field>
-            <Field label="Period to"><Input type="date" name="period_to" /></Field>
-            <Field label="Claimed amount"><Input type="number" name="claimed_amount" step="0.01" min="0" inputMode="decimal" required /></Field>
-            <Field label="Claimed % of contract"><Input type="number" name="claimed_percent" step="0.1" min="0" max="100" /></Field>
-          </div>
-          <Field label="Notes"><Textarea name="notes" rows={2} /></Field>
-          <Field label="Invoice file"><Input type="file" name="file" /></Field>
-          <SubmitButton>Submit invoice</SubmitButton>
-        </form>
+      <CardSection title="Submit invoice" subtitle="Enter this period's quantities against your subcontract items. Rates are fixed by the contract; VAT is added automatically.">
+        <PortalInvoiceForm token={token} today={today} boq={getAssignmentBoq(a.id)} vatRate={DEFAULT_VAT_RATE} currency={getSetting("currency", "AED")} defaults={{ name: subcontractor.contact_person ?? "", email: subcontractor.email ?? "" }} />
       </CardSection>
 
       <CardSection title="Request completion certificate">
@@ -144,7 +143,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
             <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Invoices</h3>
             {invoices.length === 0 ? <p className="text-slate-400">None yet</p> : (
               <ul className="divide-y divide-slate-100">{invoices.map((i) => (
-                <li key={i.id} className="flex items-center justify-between gap-2 py-2"><span>{i.invoice_no ?? `#${i.id}`} · {formatMoney(i.claimed_amount)}{i.certified_amount ? ` (certified ${formatMoney(i.certified_amount)})` : ""}</span><StatusBadge kind="invoiceStatus" value={i.status} /></li>
+                <li key={i.id} className="flex items-center justify-between gap-2 py-2"><span>{i.invoice_no ?? `#${i.id}`}{i.sub_invoice_ref ? ` (${i.sub_invoice_ref})` : ""} · {formatMoney(i.claimed_amount)}{i.certified_amount ? ` (certified ${formatMoney(i.certified_amount)})` : ""}</span><StatusBadge kind="invoiceStatus" value={i.status} /></li>
               ))}</ul>
             )}
           </div>

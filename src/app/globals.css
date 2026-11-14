@@ -47,3 +47,12 @@ body { background: var(--background); color: var(--foreground); font-family: var
 h1, h2 { letter-spacing: -0.02em; }
 ::placeholder { color: #94a3b8; }
 .leaflet-container { font-family: inherit; z-index: 0; }
+
+/* Printing an invoice (Print button on /invoices/[id]): only the paper document is printed. */
+@media print {
+  aside, header.sticky, nav, .no-print { display: none !important; }
+  body { background: #fff !important; }
+  main { padding: 0 !important; max-width: none !important; }
+  .print-paper { box-shadow: none !important; border: 0 !important; max-width: none !important; padding: 0 !important; }
+  .print-grid { display: block !important; }
+}
