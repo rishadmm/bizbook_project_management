@@ -3,6 +3,7 @@ import { RAG_HEX, statusHex, statusLabel, ENUMS, TONE_HEX } from "@/lib/status";
 import { pct } from "@/lib/format";
 import type { ProjectListItem, ProjectRow, StageRowEx } from "../queries";
 import { esc, parseFeatures } from "../geo";
+import { BRAND, MAP_COLORS } from "@/lib/theme";
 
 export const STAGE_LEGEND: MapLegendItem[] = (["not_started", "in_progress", "delayed", "on_hold", "completed"] as const)
   .map((k) => ({ label: ENUMS.stageStatus[k].label, color: TONE_HEX[ENUMS.stageStatus[k].tone] }));
@@ -13,7 +14,7 @@ export function projectMapFeatures(
   const out: MapFeature[] = [];
   const withGeom = stages.filter((s) => s.geometry);
   parseFeatures(p.geometry).forEach((f, i) => {
-    out.push({ id: `p${i}`, kind: "project", geometry: f.geometry, color: withGeom.length && !editable ? "#cbd5e1" : "#2563eb", label: p.name, editable: true });
+    out.push({ id: `p${i}`, kind: "project", geometry: f.geometry, color: withGeom.length && !editable ? MAP_COLORS.remaining : BRAND.primary, label: p.name, editable: true });
   });
   for (const s of withGeom) {
     const g = parseFeatures(s.geometry)[0];

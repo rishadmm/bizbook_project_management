@@ -1,11 +1,13 @@
 import { Button, Field, Input, Textarea } from "@/components/ui";
 import type { Subcontractor } from "@/lib/types";
+import ActionForm from "@/components/ActionForm";
+import type { ActionResult } from "@/lib/action-result";
 
 /** Profile fields form (create or edit). `action` is a server action. */
-export function ProfileForm({ action, sub, submitLabel }: { action: (f: FormData) => Promise<void>; sub?: Subcontractor; submitLabel: string }) {
+export function ProfileForm({ action, sub, submitLabel }: { action: (f: FormData) => Promise<ActionResult | void>; sub?: Subcontractor; submitLabel: string }) {
   const v = (k: keyof Subcontractor) => (sub?.[k] as string | number | null | undefined) ?? "";
   return (
-    <form action={action} className="space-y-5">
+    <ActionForm action={action} className="space-y-5">
       {sub && <input type="hidden" name="id" value={sub.id} />}
       <div className="grid gap-4 md:grid-cols-3">
         <Field label="Company name *"><Input name="name" required defaultValue={v("name")} /></Field>
@@ -24,6 +26,6 @@ export function ProfileForm({ action, sub, submitLabel }: { action: (f: FormData
       </div>
       <Field label="Notes"><Textarea name="notes" rows={3} defaultValue={v("notes")} /></Field>
       <Button type="submit" variant="primary">{submitLabel}</Button>
-    </form>
+    </ActionForm>
   );
 }

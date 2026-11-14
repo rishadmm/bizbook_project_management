@@ -9,15 +9,15 @@ export interface TabDef { key: string; label: string; count?: number }
  */
 export function Tabs({ tabs, active, basePath, extraQuery }: { tabs: TabDef[]; active: string; basePath: string; extraQuery?: Record<string, string | undefined> }) {
   return (
-    <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200">
+    <div className="mb-5 flex gap-1 overflow-x-auto border-b border-line">
       {tabs.map((t) => {
         const q = new URLSearchParams();
         for (const [k, v] of Object.entries(extraQuery ?? {})) if (v) q.set(k, v);
         q.set("tab", t.key);
         return (
           <Link key={t.key} href={`${basePath}?${q.toString()}`} scroll={false}
-            className={cn("-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm font-medium",
-              active === t.key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800")}>
+            className={cn("-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold",
+              active === t.key ? "border-primary text-primary font-bold" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800")}>
             {t.label}{t.count !== undefined && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{t.count}</span>}
           </Link>
         );

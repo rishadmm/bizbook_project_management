@@ -134,7 +134,7 @@ export function SubProjectForm({ parentId, users, unit, today }: { parentId: num
 
 export function InvoiceForm({ projectId, assignments, today }: { projectId: number; assignments: Opt[]; today: string }) {
   return (
-    <form action={createInvoice} encType="multipart/form-data" className="space-y-3">
+    <form action={createInvoice} className="space-y-3">
       <input type="hidden" name="project_id" value={projectId} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Subcontract"><Select name="assignment_id" required options={assignments} placeholder="Select…" /></Field>
@@ -153,7 +153,7 @@ export function InvoiceForm({ projectId, assignments, today }: { projectId: numb
 
 export function CertificateForm({ projectId, assignments, today }: { projectId: number; assignments: Opt[]; today: string }) {
   return (
-    <form action={saveCertificate} encType="multipart/form-data" className="space-y-3">
+    <form action={saveCertificate} className="space-y-3">
       <input type="hidden" name="project_id" value={projectId} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Subcontract"><Select name="assignment_id" required options={assignments} placeholder="Select…" /></Field>

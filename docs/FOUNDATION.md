@@ -88,3 +88,11 @@ Portal links are printed by the seed (`http://localhost:3100/portal/<token>`); q
 - `setCurrentUser` is defined in `lib/session-actions.ts` and re-exported from `lib/session.ts` (a client component cannot import session.ts).
 - `ProjectMapLazy` wraps `ProjectMapInner.tsx` (cannot self-import).
 - System font stack instead of next/font (offline-safe). Clients page is a placeholder (not in module list).
+
+## Approvals (AUTH_SPEC section D)
+- Engine: `src/lib/approvals/engine.ts` (sync, transactional, takes the acting user id explicitly): `submitForApproval(type, docId, {userId, note?, payload?}) -> {status: 'pending'|'auto_approved', requestId}`, `decide(taskId, 'approve'|'reject'|'return', comment, actorId)`, `cancelRequest(requestId, actorId)`, `withdrawOpenRequest(type, docId, actorId)` (module actions that withdraw/close a document), `getApprovalStatus(type, docId)`, `getMyPendingTasks(userId)`, `getPendingCount(userId)`, `hasOpenRequest(type, docId)`, `selectWorkflow`, `applicableLevels`, `resolveApprovers`, `activeDelegate`.
+- Registry: `src/lib/approvals/registry.ts` holds the 10 document types (`getDocument`, `canSubmit`, `onApproved/onRejected/onReturned/onCancelled`). Add a type there + a label in `meta.ts` + a default workflow in `defaults.ts`.
+- A module action that used to jump to the final status now calls `submitForApproval` (inside its own transaction); when no workflow matches the engine auto-approves and the handler applies the old transition. Never set the final status directly.
+- UI: `<ApprovalPanel type documentId path user canSubmit? compact? />` (`@/components/approvals/ApprovalPanel`); inbox `/approvals`; designer `/admin/approval-workflows`.
+- Tables: approval_workflows, approval_levels, approval_requests (levels snapshot in `levels_json`, action payload in `payload`), approval_tasks, approval_delegations, approval_events, project_cost_requests. Settings: `approval_cost_threshold` (default 50000), `approval_required_<type>` = 1 blocks submission when no workflow matches.
+- Seed adds users Hamdan Al Zaabi (management) and Mariam Khoury (finance) so that every default level has an approver other than the requester.

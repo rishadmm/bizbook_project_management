@@ -170,3 +170,34 @@ export interface Issue extends Base {
   description: Nullable<string>; responsibility: DelayResponsibility; impact_days: number; impact_cost: number;
   status: IssueStatus; raised_on: Nullable<string>; resolved_on: Nullable<string>;
 }
+
+/* ------------------------------------------------------------------ approvals (AUTH_SPEC section D) */
+export type ApprovalDocType =
+  | "tender_submission" | "tender_revision" | "tender_award" | "subcontractor_onboarding" | "subcontract_award"
+  | "sub_invoice" | "invoice_payment" | "completion_certificate" | "project_cost" | "loss_analysis";
+export type ApproverType = "role" | "user" | "department" | "department_head" | "project_manager" | "requester_manager";
+export type ApprovalMode = "any" | "all" | "min";
+export type ApprovalRequestStatus = "pending" | "approved" | "rejected" | "returned" | "cancelled";
+export type ApprovalTaskStatus = "pending" | "approved" | "rejected" | "returned" | "skipped";
+export interface ApprovalWorkflow extends Base {
+  document_type: ApprovalDocType; name: string; description: Nullable<string>; is_active: number; priority: number;
+  condition_min_amount: Nullable<number>; condition_max_amount: Nullable<number>; condition_department_id: Nullable<number>;
+  condition_project_category: Nullable<string>; created_by: Nullable<number>; updated_at: Nullable<string>;
+}
+export interface ApprovalLevel extends Base {
+  workflow_id: number; level_no: number; name: string; approver_type: ApproverType; approver_role_id: Nullable<number>;
+  approver_user_id: Nullable<number>; approver_department_id: Nullable<number>; approval_mode: ApprovalMode; min_approvals: number;
+  min_amount: Nullable<number>; sla_hours: number; allow_self_approval: number;
+}
+export interface ApprovalRequest extends Base {
+  document_type: ApprovalDocType; document_id: number; document_ref: Nullable<string>; title: Nullable<string>; amount: number;
+  workflow_id: Nullable<number>; current_level: number; status: ApprovalRequestStatus; requested_by: Nullable<number>;
+  requested_at: string; completed_at: Nullable<string>; note: Nullable<string>; levels_json: Nullable<string>; payload: Nullable<string>;
+}
+export interface ApprovalTask extends Base {
+  request_id: number; level_no: number; assignee_user_id: number; status: ApprovalTaskStatus; decision_comment: Nullable<string>;
+  decided_at: Nullable<string>; decided_by: Nullable<number>; delegated_from_user_id: Nullable<number>; due_at: Nullable<string>;
+}
+export interface ApprovalDelegation extends Base {
+  user_id: number; delegate_user_id: number; start_date: string; end_date: string; document_types: Nullable<string>; is_active: number;
+}

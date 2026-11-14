@@ -8,19 +8,23 @@ import { Field, Input, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { ModalButton } from "@/components/ui/Modal";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
+import ApprovalSettingsForm from "@/features/settings/ApprovalSettingsForm";
+import { REGISTRY } from "@/lib/approvals/registry";
+import { DOC_TYPES } from "@/lib/approvals/meta";
 import { deleteDepartment, saveCompanySettings, saveDepartment } from "@/features/settings/actions";
+import ActionForm from "@/components/ActionForm";
 
 type DeptRow = Department & { head_name: string | null; user_count: number };
 
 function DeptForm({ dept, users }: { dept?: DeptRow; users: Pick<User, "id" | "name">[] }) {
   return (
-    <form action={saveDepartment} className="space-y-3">
+    <ActionForm action={saveDepartment} className="space-y-3">
       {dept && <input type="hidden" name="id" value={dept.id} />}
       <Field label="Name"><Input name="name" required defaultValue={dept?.name} /></Field>
       <Field label="Code"><Input name="code" maxLength={8} defaultValue={dept?.code ?? ""} /></Field>
       <Field label="Department head" hint="Used by approval workflows (department head approver)."><Select name="head_user_id" defaultValue={dept?.head_user_id ?? ""} options={users.map((u) => ({ value: u.id, label: u.name }))} placeholder="—" /></Field>
       <div className="flex justify-end"><Button type="submit" variant="primary">Save</Button></div>
-    </form>
+    </ActionForm>
   );
 }
 
@@ -38,11 +42,16 @@ export default async function SettingsPage() {
       <PageHeader title="Settings" description="Company profile and departments." />
       <div className="space-y-5">
         <CardSection title="Company">
-          <form action={saveCompanySettings} className="grid max-w-2xl gap-3 sm:grid-cols-[1fr_140px_auto] sm:items-end">
+          <ActionForm action={saveCompanySettings} className="grid max-w-2xl gap-3 sm:grid-cols-[1fr_140px_auto] sm:items-end">
             <Field label="Company name"><Input name="company_name" required defaultValue={getSetting("company_name")} disabled={!canEdit} /></Field>
             <Field label="Currency (ISO)"><Input name="currency" required maxLength={3} defaultValue={getSetting("currency", "AED")} disabled={!canEdit} /></Field>
             {canEdit && <Button type="submit" variant="primary">Save</Button>}
-          </form>
+          </ActionForm>
+        </CardSection>
+
+        <CardSection title="Approvals" subtitle="When approvals are required. Workflows themselves are designed under Administration.">
+          <ApprovalSettingsForm canEdit={canEdit} currency={getSetting("currency", "AED")} threshold={getSetting("approval_cost_threshold", "50000")}
+            types={DOC_TYPES.map((d) => ({ type: d.type, label: REGISTRY[d.type].label, required: getSetting(`approval_required_${d.type}`, "0") === "1" }))} />
         </CardSection>
 
         <CardSection title="Users &amp; access" subtitle="Users, roles and permissions are managed in the Administration area.">
@@ -63,7 +72,7 @@ export default async function SettingsPage() {
                     {canEdit && (
                       <div className="flex justify-end gap-1.5">
                         <ModalButton label="Edit" title={`Edit ${d.name}`} size="sm"><DeptForm dept={d} users={users} /></ModalButton>
-                        <form action={deleteDepartment}><input type="hidden" name="id" value={d.id} /><Button type="submit" size="sm" variant="danger">Delete</Button></form>
+                        <ActionForm action={deleteDepartment}><input type="hidden" name="id" value={d.id} /><Button type="submit" size="sm" variant="danger">Delete</Button></ActionForm>
                       </div>
                     )}
                   </TD>

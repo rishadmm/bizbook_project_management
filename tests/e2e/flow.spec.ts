@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
 import path from "node:path";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3100";
-const db = () => new Database(path.join(process.cwd(), "data", "ops.db"), { readonly: true });
+const db = () => new Database((process.env.OPS_DB_PATH ?? path.join(process.cwd(), "data", "ops.db")), { readonly: true });
 const q = <T,>(sql: string, ...p: unknown[]) => { const d = db(); try { return d.prepare(sql).all(...p) as T[]; } finally { d.close(); } };
 const one = <T,>(sql: string, ...p: unknown[]) => q<T>(sql, ...p)[0];
 
@@ -44,6 +44,17 @@ async function clickBtn(name: string | RegExp, scope: Page | ReturnType<Page["lo
   await settle();
 }
 const modal = () => page.locator("div.fixed.inset-0");
+/** Sign in as `userId`, open the approval inbox and approve the pending task of document `ref` (exercises the quick-decision form). */
+async function approveInInbox(userId: number, ref: string) {
+  await as(userId);
+  await go("/approvals");
+  const row = page.locator("tbody tr", { hasText: ref }).first();
+  await expect(row, `inbox of user ${userId} should list ${ref}`).toBeVisible();
+  await row.getByRole("button", { name: "Approve", exact: true }).click();
+  await settle();
+}
+const pendingTasks = (type: string, docId: number) => q<{ assignee_user_id: number; level_no: number }>(
+  "select t.assignee_user_id, t.level_no from approval_tasks t join approval_requests r on r.id=t.request_id where r.document_type=? and r.document_id=? and r.status='pending' and t.status='pending'", type, docId);
 
 test.describe.serial("tender-to-project flow", () => {
   let tenderId = 0;
@@ -155,23 +166,31 @@ test.describe.serial("tender-to-project flow", () => {
     expect(one<{ c: number }>("select count(*) c from margin_changes where reason like '%QA bulk margin'").c).toBeGreaterThan(0);
   });
 
-  test("send for review, approve as 4 different users", async () => {
+  test("send for review, approve through the 3-level workflow", async () => {
     await go(`/tenders/${tenderId}`);
     await clickBtn("Send for review");
     expect(one<{ status: string }>("select status from tenders where id=?", tenderId).status).toBe("under_review");
-    const reviews = q<{ id: number; department_id: number }>("select id, department_id from tender_reviews where tender_id=?", tenderId);
-    expect(reviews.length).toBe(4);
-    // Technical -> Sara(4), Finance -> Imran(5), Operations -> Layla(2), Management -> Omar(1)
-    for (const uid of [4, 5, 2, 1]) {
-      await as(uid);
-      await go(`/tenders/${tenderId}?tab=reviews`);
-      await clickBtn("Decide");
-      await modal().getByRole("button", { name: "Submit decision" }).click();
-      await settle();
+    const req = one<{ id: number; current_level: number; status: string }>("select id, current_level, status from approval_requests where document_type='tender_submission' and document_id=?", tenderId);
+    expect(req.status).toBe("pending");
+    expect(q("select id from tender_reviews where tender_id=?", tenderId).length).toBe(0); // legacy reviews are no longer created
+    // L1 Technical head Sara(4) - or her delegate Daniel(7): the seed has Sara out of office - then L2 Finance head Imran(5), L3 Management role Hamdan(11)
+    const first = q<{ assignee_user_id: number; delegated_from_user_id: number | null }>("select assignee_user_id, delegated_from_user_id from approval_tasks where request_id=? and status='pending'", req.id);
+    expect(first).toHaveLength(1);
+    expect([4, 7]).toContain(first[0].assignee_user_id);
+    const approvers: number[] = [];
+    for (let level = 1; level <= 3; level++) {
+      const pend = pendingTasks("tender_submission", tenderId);
+      expect(pend.length).toBeGreaterThan(0);
+      expect(pend[0].level_no).toBe(level);
+      approvers.push(pend[0].assignee_user_id);
+      await as(pend[0].assignee_user_id);
+      await go(`/tenders/${tenderId}?tab=approvals`);
+      await clickBtn("Approve", page.locator("[data-approval-panel=tender_submission]"));
     }
-    const done = q<{ decision: string; reviewer_id: number }>("select decision, reviewer_id from tender_reviews where tender_id=?", tenderId);
-    expect(done.every((d) => d.decision === "approved")).toBeTruthy();
-    expect(new Set(done.map((d) => d.reviewer_id)).size).toBe(4);
+    expect(approvers.slice(1)).toEqual([5, 11]);
+    const done = q<{ status: string; decided_by: number }>("select t.status, t.decided_by from approval_tasks t join approval_requests r on r.id=t.request_id where r.document_type='tender_submission' and r.document_id=? and t.status='approved'", tenderId);
+    expect(new Set(done.map((d) => d.decided_by))).toEqual(new Set(approvers));
+    expect(one<{ status: string }>("select status from approval_requests where id=?", req.id).status).toBe("approved");
     expect(one<{ status: string }>("select status from tenders where id=?", tenderId).status).toBe("approved");
   });
 
@@ -205,10 +224,16 @@ test.describe.serial("tender-to-project flow", () => {
     await page.locator("textarea").last().fill("QA R1 concession");
     await clickBtn("Apply", modal());
     await go(`/tenders/${tenderId}?tab=commercial`);
-    await clickBtn(/Submit R1 to client/);
+    await clickBtn(/Submit R1 for approval/);
+    const r1 = one<{ id: number }>("select id from tender_revisions where tender_id=? and rev_no=1", tenderId);
+    expect(one<{ status: string }>("select status from tender_revisions where id=?", r1.id).status).toBe("draft"); // stays draft until approved
+    expect(pendingTasks("tender_revision", r1.id).map((t) => t.assignee_user_id)).toEqual([3]); // L1 Commercial head Rahul
+    await approveInInbox(3, "R1");
+    await approveInInbox(11, "R1"); // L2 management
     const revs = q<{ rev_no: number; status: string }>("select rev_no,status from tender_revisions where tender_id=? order by rev_no", tenderId);
     expect(revs[0].status).toBe("superseded");
     expect(revs[1].status).toBe("submitted");
+    await as(1);
   });
 
   test("mark won creates project with budget lines and stages", async () => {
@@ -218,9 +243,14 @@ test.describe.serial("tender-to-project flow", () => {
     await modal().locator("[name=end_date]").fill("2027-03-01");
     await modal().locator("[name=manager_id]").selectOption({ index: 2 });
     await modal().getByRole("button", { name: "Mark won and create project" }).click();
-    await page.waitForURL(/\/projects\/\d+/, { timeout: 30000 });
-    projectId = Number(page.url().match(/projects\/(\d+)/)![1]);
+    await page.waitForURL(/\/tenders\/\d+\?tab=approvals/, { timeout: 30000 });
+    // the award waits for the tender_award workflow (L1 Management role; the GM level only applies from 20M)
+    expect(one<{ status: string; project_id: number | null }>("select status, project_id from tenders where id=?", tenderId)).toMatchObject({ status: "negotiation", project_id: null });
+    await approveInInbox(11, one<{ code: string }>("select code from tenders where id=?", tenderId).code);
+    await as(1);
     const t = one<{ status: string; project_id: number }>("select status, project_id from tenders where id=?", tenderId);
+    projectId = t.project_id;
+    await go(`/projects/${projectId}`);
     expect(t.status).toBe("won");
     expect(t.project_id).toBe(projectId);
     expect(q("select id from project_budget_lines where project_id=?", projectId).length).toBe(4);
@@ -272,11 +302,19 @@ test.describe.serial("tender-to-project flow", () => {
     await modal().locator("[name=status]").selectOption("active");
     await modal().getByRole("button", { name: /save|create|add/i }).last().click();
     await settle();
-    const a = one<{ id: number; contract_value: number; portal_token: string; portal_enabled: number }>("select id,contract_value,portal_token,portal_enabled from assignments where project_id=?", projectId);
+    let a = one<{ id: number; contract_value: number; portal_token: string; portal_enabled: number; status: string; code: string }>("select id,contract_value,portal_token,portal_enabled,status,code from assignments where project_id=?", projectId);
     expect(a).toBeTruthy();
     assignmentId = a.id; token = a.portal_token;
     expect(a.contract_value).toBe(50000);
     expect(token.length).toBeGreaterThan(10);
+    // activation is gated by the subcontract_award workflow: L1 project manager, L2 management
+    expect(a.status).toBe("draft");
+    const pm = one<{ manager_id: number }>("select manager_id from projects where id=?", projectId).manager_id;
+    await approveInInbox(pm, a.code);
+    await approveInInbox(11, a.code);
+    await as(1);
+    a = one("select id,contract_value,portal_token,portal_enabled,status,code from assignments where project_id=?", projectId);
+    expect(a.status).toBe("active");
     if (!a.portal_enabled) {
       // enable portal via UI
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -350,8 +388,13 @@ test.describe.serial("tender-to-project flow", () => {
     expect(inv.status).toBe("certified");
     expect(inv.certified_amount).toBe(18000);
     expect(inv.retention_amount).toBeGreaterThan(0);
-    await go(`/invoices`);
-    await clickBtn("Approve", page.locator("tr", { hasText: "QA-INV-1" }));
+    // certification raised the sub_invoice request: L1 project manager, L2 finance role
+    const invId = one<{ id: number }>("select id from sub_invoices where assignment_id=?", assignmentId).id;
+    const pm = one<{ manager_id: number }>("select manager_id from projects where id=?", projectId).manager_id;
+    expect(pendingTasks("sub_invoice", invId).map((t) => t.assignee_user_id)).toEqual([pm]);
+    await approveInInbox(pm, "QA-INV-1");
+    await approveInInbox(5, "QA-INV-1");
+    await as(1);
     expect(one<{ status: string }>("select status from sub_invoices where assignment_id=?", assignmentId).status).toBe("approved");
     // auto-posted cost
     expect(one<{ c: number }>("select count(*) c from project_costs where project_id=? and source_type='sub_invoice'", projectId).c).toBe(1);
@@ -359,12 +402,19 @@ test.describe.serial("tender-to-project flow", () => {
     await clickBtn("Mark paid", page.locator("tr", { hasText: "QA-INV-1" }));
     await modal().getByRole("button", { name: "Record payment" }).click();
     await settle();
+    expect(one<{ status: string }>("select status from sub_invoices where assignment_id=?", assignmentId).status).toBe("approved"); // payment awaits approval
+    await approveInInbox(5, "QA-INV-1"); // invoice_payment: finance role (L2 management only from 1M)
+    await as(1);
     inv = one("select status,certified_amount,retention_amount,net_payable from sub_invoices where assignment_id=?", assignmentId);
     expect(inv.status).toBe("paid");
     // certificate
     await go(`/projects/${projectId}?tab=invoices`);
     await page.getByRole("button", { name: /^Issue/ }).first().click();
     await settle();
+    expect(one<{ status: string }>("select status from completion_certificates where assignment_id=?", assignmentId).status).not.toBe("issued"); // awaits the PM
+    const cert = one<{ id: number; cert_no: string | null }>("select id, cert_no from completion_certificates where assignment_id=?", assignmentId);
+    await approveInInbox(one<{ manager_id: number }>("select manager_id from projects where id=?", projectId).manager_id, cert.cert_no ?? `#${cert.id}`);
+    await as(1);
     expect(one<{ status: string }>("select status from completion_certificates where assignment_id=?", assignmentId).status).toBe("issued");
     // metrics
     await go(`/projects/${projectId}?tab=overview`);
@@ -404,6 +454,11 @@ test.describe.serial("tender-to-project flow", () => {
     }
     expect(one<{ c: number }>("select count(*) c from onboarding_checklist where subcontractor_id=? and done=1", subId).c).toBe(6);
     await clickBtn(/Approve subcontractor/);
+    expect(one<{ status: string }>("select status from subcontractors where id=?", subId).status).toBe("onboarding"); // pending onboarding approval
+    const subCode = one<{ code: string }>("select code from subcontractors where id=?", subId).code;
+    await approveInInbox(8, subCode); // L1 Procurement head
+    await approveInInbox(9, subCode); // L2 HSE head
+    await as(1);
     expect(one<{ status: string }>("select status from subcontractors where id=?", subId).status).toBe("approved");
     await go(`/subcontractors/${subId}?tab=documents`);
     await clickBtn("Add document");
@@ -438,7 +493,7 @@ test.describe.serial("tender-to-project flow", () => {
 
   test("no hydration/console errors on main pages", async () => {
     consoleProblems.length = 0;
-    const urls = ["/", "/tenders", "/tenders?view=table", `/tenders/${tenderId}?tab=budget`, `/tenders/${tenderId}?tab=commercial`, "/lost-analysis", "/clients", "/projects", "/projects?view=map", `/projects/${projectId}?tab=overview`, `/projects/${projectId}?tab=map`, `/projects/${projectId}?tab=stages`, "/subcontractors", `/subcontractors/${subId}`, "/invoices", "/settings", "/search?q=road", `/portal/${token}`];
+    const urls = ["/", "/tenders", "/tenders?view=table", `/tenders/${tenderId}?tab=budget`, `/tenders/${tenderId}?tab=commercial`, "/lost-analysis", "/clients", "/projects", "/projects?view=map", `/projects/${projectId}?tab=overview`, `/projects/${projectId}?tab=map`, `/projects/${projectId}?tab=stages`, "/subcontractors", `/subcontractors/${subId}`, "/invoices", "/approvals", "/approvals?tab=submitted", "/approvals?tab=completed", "/approvals?tab=delegations", "/admin/approval-workflows", `/tenders/${tenderId}?tab=approvals`, "/settings", "/search?q=road", `/portal/${token}`];
     for (const u of urls) { await go(u); await page.waitForTimeout(500); }
     const real = consoleProblems.filter((p) => !/tile\.openstreetmap|arcgisonline|Failed to load resource.*(tile|net::ERR)/i.test(p));
     expect(real, real.join("\n")).toEqual([]);

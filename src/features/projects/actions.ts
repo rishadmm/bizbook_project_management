@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { nanoid } from "nanoid";
-import { getDb } from "@/lib/db";
+import { getDb, getSetting } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { getCurrentUser } from "@/lib/session";
 import { saveUploadsFromForm } from "@/lib/files";
@@ -11,6 +11,7 @@ import { ENUMS } from "@/lib/status";
 import type { Assignment, Project, Stage, SubInvoice } from "@/lib/types";
 import { firstLine, lineLengthKm, measureGeometry, sliceLine } from "./geo";
 import { requireAnyPermission, requirePermission } from "@/lib/auth";
+import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -263,7 +264,7 @@ export async function splitRouteAtChainages(form: FormData): Promise<void> {
 /* ---------------------------------------------------------------- subcontracts (assignments) */
 
 export async function saveAssignment(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const user = await requirePermission("subcontractors", "edit");
   const projectId = Number(form.get("project_id"));
   project(projectId);
   const id = Number(form.get("id")) || 0;
@@ -278,21 +279,34 @@ export async function saveAssignment(form: FormData): Promise<void> {
   const sd = dateOrNull(form, "start_date"), ed = dateOrNull(form, "end_date");
   if (sd && ed && ed < sd) throw new Error("End date is before start date");
   const db = getDb();
+  const prev = id ? (db.prepare("SELECT status FROM assignments WHERE id = ? AND project_id = ?").get(id, projectId) as { status: string } | undefined) : undefined;
+  if (id && !prev) throw new Error("Subcontract not found");
+  // Activating a draft subcontract goes through the subcontract_award approval workflow (status stays draft until approved).
+  const activate = status === "active" && (!id || prev?.status === "draft");
+  const effective = activate ? "draft" : status;
   const vals = [idOrNull(form, "stage_id"), subId, strOrNull(form, "scope"), value, qty, strOrNull(form, "quantity_unit"), rate, sd, ed,
-    strOrNull(form, "payment_terms"), adv, ret, Math.floor(num(form, "payment_days", 30)), status];
-  if (id) {
-    db.prepare("UPDATE assignments SET stage_id=?, subcontractor_id=?, scope=?, contract_value=?, quantity=?, quantity_unit=?, unit_rate=?, start_date=?, end_date=?, payment_terms=?, advance_pct=?, retention_pct=?, payment_days=?, status=? WHERE id=? AND project_id=?")
-      .run(...vals, id, projectId);
-    await logActivity("assignment", id, "updated", "Subcontract updated");
-  } else {
-    const maxN = (db.prepare("SELECT code FROM assignments WHERE code LIKE 'SC-%'").all() as { code: string }[]).reduce((m, r) => Math.max(m, Number(r.code.slice(3)) || 0), 0);
-    const code = `SC-${String(maxN + 1).padStart(3, "0")}`;
-    const rid = Number(db.prepare(`INSERT INTO assignments(stage_id, subcontractor_id, scope, contract_value, quantity, quantity_unit, unit_rate, start_date, end_date, payment_terms, advance_pct, retention_pct, payment_days, status, project_id, code, portal_token, portal_enabled)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`).run(...vals, projectId, code, nanoid(24)).lastInsertRowid);
-    await logActivity("assignment", rid, "created", `Subcontract ${code} created`);
+    strOrNull(form, "payment_terms"), adv, ret, Math.floor(num(form, "payment_days", 30)), effective];
+  let savedId = id; let created = false;
+  db.transaction(() => {
+    if (id) {
+      db.prepare("UPDATE assignments SET stage_id=?, subcontractor_id=?, scope=?, contract_value=?, quantity=?, quantity_unit=?, unit_rate=?, start_date=?, end_date=?, payment_terms=?, advance_pct=?, retention_pct=?, payment_days=?, status=? WHERE id=? AND project_id=?")
+        .run(...vals, id, projectId);
+    } else {
+      const maxN = (db.prepare("SELECT code FROM assignments WHERE code LIKE 'SC-%'").all() as { code: string }[]).reduce((m, r) => Math.max(m, Number(r.code.slice(3)) || 0), 0);
+      const code = `SC-${String(maxN + 1).padStart(3, "0")}`;
+      savedId = Number(db.prepare(`INSERT INTO assignments(stage_id, subcontractor_id, scope, contract_value, quantity, quantity_unit, unit_rate, start_date, end_date, payment_terms, advance_pct, retention_pct, payment_days, status, project_id, code, portal_token, portal_enabled)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`).run(...vals, projectId, code, nanoid(24)).lastInsertRowid);
+      created = true;
+    }
+    if (activate && !hasOpenRequest("subcontract_award", savedId)) submitForApproval("subcontract_award", savedId, { userId: user.id });
+  })();
+  const code = (db.prepare("SELECT code FROM assignments WHERE id = ?").get(savedId) as { code: string }).code;
+  if (created) {
+    await logActivity("assignment", savedId, "created", `Subcontract ${code} created`);
     await logActivity("project", projectId, "subcontract", `Subcontract ${code} assigned`);
-  }
+  } else await logActivity("assignment", savedId, "updated", "Subcontract updated");
   refresh(projectId);
+  revalidatePath("/", "layout");
 }
 
 export async function deleteAssignment(form: FormData): Promise<void> {
@@ -315,6 +329,7 @@ export async function setPortalEnabled(form: FormData): Promise<void> {
   const db = getDb();
   const a = db.prepare("SELECT * FROM assignments WHERE id = ?").get(id) as Assignment | undefined;
   if (!a) throw new Error("Subcontract not found");
+  if (enable && a.status !== "active") throw new Error("The portal can be enabled only for an active (approved) subcontract");
   if (enable && !a.portal_token) db.prepare("UPDATE assignments SET portal_token = ? WHERE id = ?").run(nanoid(24), id);
   db.prepare("UPDATE assignments SET portal_enabled = ? WHERE id = ?").run(enable ? 1 : 0, id);
   await logActivity("assignment", id, "portal", `Portal ${enable ? "enabled" : "disabled"} for ${a.code}`);
@@ -408,7 +423,7 @@ export async function rejectProgressReport(form: FormData): Promise<void> { awai
 /* ---------------------------------------------------------------- budget & cost */
 
 export async function addManualCost(form: FormData): Promise<void> {
-  await requirePermission("project_costs", "create");
+  const user = await requirePermission("project_costs", "create");
   const projectId = Number(form.get("project_id"));
   project(projectId);
   const category = oneOf("budgetCategory", str(form, "category"), "category");
@@ -416,10 +431,24 @@ export async function addManualCost(form: FormData): Promise<void> {
   if (!(amount > 0)) throw new Error("Amount must be greater than zero");
   const description = str(form, "description");
   if (!description) throw new Error("Description is required");
-  getDb().prepare("INSERT INTO project_costs(project_id, stage_id, category, description, amount, cost_date, source_type, source_id) VALUES (?,?,?,?,?,?, 'manual', NULL)")
-    .run(projectId, idOrNull(form, "stage_id"), category, description, amount, dateOrNull(form, "cost_date") ?? todayISO());
-  await logActivity("project", projectId, "cost", `Manual cost added: ${description} (${amount})`);
+  const stageId = idOrNull(form, "stage_id"); const date = dateOrNull(form, "cost_date") ?? todayISO();
+  const threshold = Number(getSetting("approval_cost_threshold", "50000")) || 50000;
+  const db = getDb();
+  if (amount > threshold) {
+    // Above the threshold the cost waits for the project_cost approval workflow before it is posted to the ledger.
+    db.transaction(() => {
+      const rid = Number(db.prepare("INSERT INTO project_cost_requests(project_id, stage_id, category, description, amount, cost_date, created_by, status) VALUES (?,?,?,?,?,?,?, 'pending')")
+        .run(projectId, stageId, category, description, amount, date, user.id || null).lastInsertRowid);
+      submitForApproval("project_cost", rid, { userId: user.id });
+    })();
+    await logActivity("project", projectId, "cost", `Manual cost ${description} (${amount}) submitted for approval (above ${threshold})`);
+  } else {
+    db.prepare("INSERT INTO project_costs(project_id, stage_id, category, description, amount, cost_date, source_type, source_id) VALUES (?,?,?,?,?,?, 'manual', NULL)")
+      .run(projectId, stageId, category, description, amount, date);
+    await logActivity("project", projectId, "cost", `Manual cost added: ${description} (${amount})`);
+  }
   refresh(projectId);
+  revalidatePath("/", "layout");
 }
 
 export async function deleteManualCost(form: FormData): Promise<void> {
@@ -491,12 +520,16 @@ export async function certifyInvoice(form: FormData): Promise<void> {
   const advance = r2((certified * (a.advance_pct || 0)) / 100);
   const net = r2(certified - retention - advance);
   const db = getDb();
+  const user = await getCurrentUser();
   db.transaction(() => {
+    withdrawOpenRequest("sub_invoice", id, user.id);
     db.prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=? WHERE id=?").run(certified, retention, advance, net, id);
     syncInvoiceCost(id);
+    // Certification raises the multi-level sub_invoice approval; the invoice becomes approved (and cost is posted) on final approval.
+    submitForApproval("sub_invoice", id, { userId: user.id });
   })();
   await logActivity("invoice", id, "certified", `Invoice ${i.invoice_no} certified ${certified} (retention ${retention}, advance recovery ${advance}, net ${net})`);
-  refresh(i.project_id);
+  refresh(i.project_id); revalidatePath("/", "layout");
 }
 
 export async function approveInvoice(form: FormData): Promise<void> {
@@ -504,10 +537,11 @@ export async function approveInvoice(form: FormData): Promise<void> {
   const id = Number(form.get("id"));
   const i = invoice(id);
   if (i.status !== "certified") throw new Error("Invoice must be certified before approval");
-  const db = getDb();
-  db.transaction(() => { db.prepare("UPDATE sub_invoices SET status='approved' WHERE id=?").run(id); syncInvoiceCost(id); })();
-  await logActivity("invoice", id, "approved", `Invoice ${i.invoice_no} approved; subcontract cost posted`);
-  refresh(i.project_id);
+  const user = await getCurrentUser();
+  if (hasOpenRequest("sub_invoice", id)) throw new Error("Invoice approval is already pending");
+  submitForApproval("sub_invoice", id, { userId: user.id });
+  await logActivity("invoice", id, "approval", `Invoice ${i.invoice_no} submitted for approval`);
+  refresh(i.project_id); revalidatePath("/", "layout");
 }
 
 export async function payInvoice(form: FormData): Promise<void> {
@@ -517,13 +551,11 @@ export async function payInvoice(form: FormData): Promise<void> {
   if (i.status !== "approved") throw new Error("Invoice must be approved before payment");
   const amount = num(form, "paid_amount", i.net_payable);
   if (!(amount > 0)) throw new Error("Paid amount must be greater than zero");
-  const db = getDb();
-  db.transaction(() => {
-    db.prepare("UPDATE sub_invoices SET status='paid', paid_amount=?, paid_date=? WHERE id=?").run(amount, dateOrNull(form, "paid_date") ?? todayISO(), id);
-    syncInvoiceCost(id);
-  })();
-  await logActivity("invoice", id, "paid", `Invoice ${i.invoice_no} paid ${amount}`);
-  refresh(i.project_id);
+  const user = await getCurrentUser();
+  if (hasOpenRequest("invoice_payment", id)) throw new Error("Payment approval is already pending");
+  submitForApproval("invoice_payment", id, { userId: user.id, payload: { paid_amount: amount, paid_date: dateOrNull(form, "paid_date") ?? todayISO() } });
+  await logActivity("invoice", id, "approval", `Payment of invoice ${i.invoice_no} (${amount}) submitted for approval`);
+  refresh(i.project_id); revalidatePath("/", "layout");
 }
 
 export async function rejectInvoice(form: FormData): Promise<void> {
@@ -532,7 +564,9 @@ export async function rejectInvoice(form: FormData): Promise<void> {
   const i = invoice(id);
   if (i.status === "paid") throw new Error("A paid invoice cannot be rejected");
   const db = getDb();
+  const actor = await getCurrentUser();
   db.transaction(() => {
+    withdrawOpenRequest("sub_invoice", id, actor.id); withdrawOpenRequest("invoice_payment", id, actor.id);
     db.prepare("UPDATE sub_invoices SET status='rejected', notes = CASE WHEN ? <> '' THEN COALESCE(notes || char(10), '') || ? ELSE notes END WHERE id=?").run(str(form, "reason"), `Rejected: ${str(form, "reason")}`, id);
     syncInvoiceCost(id);
   })();
@@ -560,24 +594,33 @@ export async function saveCertificate(form: FormData): Promise<void> {
     `INSERT INTO completion_certificates(assignment_id, project_id, stage_id, cert_type, cert_no, cert_date, percent, quantity, remarks, status, issued_by, source)
      VALUES (?,?,?,?,?,?,?,?,?,?,?, 'internal')`).run(
     assignmentId, projectId, a.stage_id, type, no, dateOrNull(form, "cert_date") ?? todayISO(), numOrNull(form, "percent"), numOrNull(form, "quantity"),
-    strOrNull(form, "remarks"), issueNow ? "issued" : "draft", issueNow ? user.id || null : null).lastInsertRowid);
+    strOrNull(form, "remarks"), "draft", null).lastInsertRowid);
   await saveUploadsFromForm(form, "files", "certificate", id, "Certificate");
-  await logActivity("certificate", id, issueNow ? "issued" : "created", `Certificate ${no} (${type}) ${issueNow ? "issued" : "drafted"}`);
-  refresh(projectId);
+  await logActivity("certificate", id, "created", `Certificate ${no} (${type}) drafted`);
+  // Issuing goes through the completion_certificate approval workflow (auto-issued when no workflow applies).
+  if (issueNow) { submitForApproval("completion_certificate", id, { userId: user.id }); await logActivity("certificate", id, "approval", `Certificate ${no} submitted for issue approval`); }
+  refresh(projectId); revalidatePath("/", "layout");
 }
 
 async function setCertStatus(form: FormData, status: "issued" | "rejected"): Promise<void> {
   const id = Number(form.get("id"));
   const db = getDb();
-  await requirePermission("certificates", "issue");
+  const user = await requirePermission("certificates", "issue");
   const c = db.prepare("SELECT * FROM completion_certificates WHERE id = ?").get(id) as { project_id: number; cert_no: string | null; status: string } | undefined;
   if (!c) throw new Error("Certificate not found");
   if (c.status === "issued" && status === "issued") return;
-  const user = await getCurrentUser();
-  db.prepare("UPDATE completion_certificates SET status = ?, issued_by = ?, cert_date = CASE WHEN ? = 'issued' THEN ? ELSE cert_date END WHERE id = ?")
-    .run(status, user.id || null, status, todayISO(), id);
-  await logActivity("certificate", id, status, `Certificate ${c.cert_no} ${status}`);
-  refresh(c.project_id);
+  if (status === "issued") {
+    if (hasOpenRequest("completion_certificate", id)) throw new Error("Certificate approval is already pending");
+    submitForApproval("completion_certificate", id, { userId: user.id });
+    await logActivity("certificate", id, "approval", `Certificate ${c.cert_no} submitted for issue approval`);
+  } else {
+    db.transaction(() => {
+      withdrawOpenRequest("completion_certificate", id, user.id);
+      db.prepare("UPDATE completion_certificates SET status = 'rejected', issued_by = ? WHERE id = ?").run(user.id || null, id);
+    })();
+    await logActivity("certificate", id, "rejected", `Certificate ${c.cert_no} rejected`);
+  }
+  refresh(c.project_id); revalidatePath("/", "layout");
 }
 export async function issueCertificate(form: FormData): Promise<void> { await setCertStatus(form, "issued"); }
 export async function rejectCertificate(form: FormData): Promise<void> { await setCertStatus(form, "rejected"); }

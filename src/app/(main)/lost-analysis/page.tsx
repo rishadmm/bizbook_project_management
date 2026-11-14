@@ -13,6 +13,7 @@ import { ENUMS, statusHex } from "@/lib/status";
 import { listLosses, lossStats } from "@/features/lost-analysis/queries";
 import { LossBar } from "@/features/lost-analysis/components/LossCharts";
 import { requirePage } from "@/lib/auth";
+import { CHART } from "@/lib/theme";
 
 export default async function LostAnalysisPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   await requirePage("lost_analysis");
@@ -35,7 +36,7 @@ export default async function LostAnalysisPage({ searchParams }: { searchParams:
       <div className="mb-5 grid gap-4 lg:grid-cols-3">
         <CardSection title="Losses by reason"><LossBar data={s.byReason.map((r) => ({ name: reasonLabel(r.reason), value: r.count, color: statusHex("lossReason", r.reason) }))} /></CardSection>
         <CardSection title="Losses by category"><LossBar data={s.byCategory.map((r) => ({ name: ENUMS.category[r.category as keyof typeof ENUMS.category]?.label ?? r.category, value: r.count, color: statusHex("category", r.category) }))} /></CardSection>
-        <CardSection title="Average price gap by reason (%)"><LossBar unit="%" data={s.gapByReason.map((r) => ({ name: reasonLabel(r.reason), value: r.gap, color: r.gap > 0 ? "#dc2626" : "#16a34a" }))} /></CardSection>
+        <CardSection title="Average price gap by reason (%)"><LossBar unit="%" data={s.gapByReason.map((r) => ({ name: reasonLabel(r.reason), value: r.gap, color: r.gap > 0 ? CHART.negative : CHART.positive }))} /></CardSection>
       </div>
 
       <CardSection title="Loss register" flush className="mb-5">

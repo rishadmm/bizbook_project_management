@@ -51,8 +51,8 @@ function Move({ id, to, label, variant = "secondary", extra }: { id: number; to:
   );
 }
 
-export function OverviewTab({ tender, revision, users, clients, currentUser, incompleteSections, totalSections }: {
-  tender: TenderDetail; revision: TenderRevision | null; users: User[]; clients: Client[]; currentUser: User; incompleteSections: number; totalSections: number;
+export function OverviewTab({ tender, revision, users, clients, currentUser, incompleteSections, totalSections, awardPending = false }: {
+  tender: TenderDetail; revision: TenderRevision | null; users: User[]; clients: Client[]; currentUser: User; incompleteSections: number; totalSections: number; awardPending?: boolean;
 }) {
   const s = tender.status;
   const marginValue = revision ? revision.total_price - revision.total_cost : 0;
@@ -75,17 +75,20 @@ export function OverviewTab({ tender, revision, users, clients, currentUser, inc
                 {incompleteSections > 0 && <span className="text-xs text-amber-700">{incompleteSections} of {totalSections} department sections are not completed{["admin", "super_admin"].includes(currentUser.role) ? "" : " - complete them first"}.</span>}
               </div>
             )}
-            {s === "under_review" && <span className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">Awaiting department reviews (see Reviews tab).</span>}
+            {s === "under_review" && <Link href={`/tenders/${tender.id}?tab=approvals`} className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 hover:underline">Awaiting multi-level approval (see Approvals tab).</Link>}
             {s === "under_review" && <Move id={tender.id} to="in_preparation" label="Withdraw to preparation" />}
             {s === "approved" && <Move id={tender.id} to="submitted" label="Submit to client" variant="primary" />}
             {s === "approved" && <Move id={tender.id} to="in_preparation" label="Back to preparation" />}
             {s === "submitted" && <Move id={tender.id} to="negotiation" label="Move to negotiation" variant="primary" />}
-            {(s === "submitted" || s === "negotiation") && (
+            {(s === "submitted" || s === "negotiation") && awardPending && (
+              <Link href={`/tenders/${tender.id}?tab=approvals`} className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 hover:underline">Award awaiting approval (see Approvals tab).</Link>
+            )}
+            {(s === "submitted" || s === "negotiation") && !awardPending && (
               <>
                 <ModalButton label="Mark Won" title={`Mark ${tender.code} as won`} variant="success">
                   <form action={markWon} className="space-y-3">
                     <input type="hidden" name="id" value={tender.id} />
-                    <p className="text-xs text-slate-500">Creates a project with budget lines and stages from the final revision ({revision?.label}).</p>
+                    <p className="text-xs text-slate-500">Submits the award for approval. When the last level approves, a project with budget lines and stages is created from the final revision ({revision?.label}).</p>
                     <div className="grid grid-cols-2 gap-3">
                       <Field label={`Final contract value (our price ${revision ? formatMoney(price) : ""})`}><Input name="won_value" type="number" step="any" min="0" required defaultValue={Math.round(price) || tender.estimated_value || ""} /></Field>
                       <Field label="Award date"><Input name="award_date" type="date" defaultValue={todayISO()} required /></Field>

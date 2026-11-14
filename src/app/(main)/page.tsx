@@ -1,11 +1,14 @@
 import Link from "next/link";
-import { AlertTriangle, Banknote, CalendarClock, FileCheck2, FolderKanban, Gauge, Trophy, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, CalendarClock, FileCheck2, FolderKanban, Gauge, Maximize2, Trophy, Wallet } from "lucide-react";
+import { buttonClass } from "@/components/ui/Button";
 import { Badge, CardSection, EmptyState, PageHeader, ProgressBar, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
 import { ProjectMapLazy } from "@/components/map/ProjectMap";
 import type { MapFeature } from "@/components/map/types";
 import { getCurrency, countdownLabel, daysUntil, formatDate, formatMoney, formatNumber, formatRatio, pct } from "@/lib/format";
 import { getDelayAttribution, getSubcontractorPerformance } from "@/lib/metrics";
 import { requirePage } from "@/lib/auth";
+import { getMyPendingTasks } from "@/lib/approvals/engine";
+import { DOC_LABEL } from "@/lib/approvals/meta";
 import { RAG_HEX, statusHex, statusLabel } from "@/lib/status";
 import {
   activeProjectHealth, expiringDocuments, pendingApprovals, portfolioTotals, tenderFunnel, upcomingDeadlines,
@@ -34,9 +37,10 @@ export default async function DashboardPage() {
   const port = portfolioTotals(health);
   const delays = getDelayAttribution(null);
   const late = getSubcontractorPerformance().filter((s) => s.delayDays > 0).sort((a, b) => b.delayDays - a.delayDays).slice(0, 6);
-  const pending = pendingApprovals(me.department_id);
+  const pending = pendingApprovals();
+  const myTasks = getMyPendingTasks(me.id);
   const docs = expiringDocuments();
-  const pendingTotal = pending.reviews.length + pending.progress.length + pending.invoices.length + pending.certs.length;
+  const pendingTotal = myTasks.length + pending.progress.length + pending.invoices.length + pending.certs.length;
 
   const features: MapFeature[] = health.flatMap(({ project: p, m }) =>
     extractGeometries(p.geometry).map((g, i) => ({
@@ -117,7 +121,7 @@ export default async function DashboardPage() {
         <CardSection title="Portfolio budget vs actual" subtitle={`Variance ${variance >= 0 ? "under" : "over"} budget: ${formatMoney(Math.abs(variance), { compact: true })} (actual cost vs BAC)`}>
           {budgetData.length ? <BudgetActualChart data={budgetData} currency={currency} /> : <EmptyState title="No data" />}
         </CardSection>
-        <CardSection title="Active projects map" subtitle="Routes coloured by health; green shows completed portion" flush>
+        <CardSection title="Active projects map" subtitle="Routes coloured by health; green shows completed portion" flush actions={<Link href="/map" className={buttonClass("secondary", "sm")}><Maximize2 size={13} className="mr-1" />Full screen</Link>}>
           {features.length ? <ProjectMapLazy features={features} height={310} legend={[{ label: "Green", color: RAG_HEX.green }, { label: "Amber", color: RAG_HEX.amber }, { label: "Red", color: RAG_HEX.red }]} /> : <div className="p-4"><EmptyState title="No project geometry" /></div>}
         </CardSection>
       </div>
@@ -148,8 +152,14 @@ export default async function DashboardPage() {
       <div className="grid gap-5 lg:grid-cols-2">
         <CardSection title="My pending approvals" subtitle={`${me.name} · ${pendingTotal} item${pendingTotal === 1 ? "" : "s"}`}>
           <div className="space-y-4">
-            <Pending title="Tender reviews (my department)" count={pending.reviews.length}>
-              {pending.reviews.map((r) => <li key={r.id} className="py-1.5"><Link className="text-blue-700 hover:underline" href={`/tenders/${r.tender_id}?tab=reviews`}>{r.code}</Link> <span className="text-slate-600">{r.title}</span></li>)}
+            <Pending title="Approvals waiting for me" count={myTasks.length}>
+              {myTasks.slice(0, 6).map((t) => (
+                <li key={t.task_id} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="min-w-0 truncate"><Link className="text-blue-700 hover:underline" href={t.url}>{t.document_ref ?? `#${t.document_id}`}</Link> <span className="text-slate-600">{DOC_LABEL[t.document_type]} · L{t.level_no} {t.level_name}</span></span>
+                  {t.overdue && <Badge tone="red">Overdue</Badge>}
+                </li>
+              ))}
+              {myTasks.length > 0 && <li className="py-1.5 text-xs"><Link className="text-blue-700 hover:underline" href="/approvals">Open approval inbox ({myTasks.length})</Link></li>}
             </Pending>
             <Pending title="Portal progress to verify" count={pending.progress.length}>
               {pending.progress.slice(0, 5).map((r) => <li key={r.id} className="py-1.5"><Link className="text-blue-700 hover:underline" href={`/projects/${r.project_id}?tab=progress`}>{r.project_code}</Link> <span className="text-slate-600">{r.subcontractor_name} · {formatDate(r.report_date)}</span></li>)}

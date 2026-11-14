@@ -10,10 +10,11 @@ import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { statusOptions } from "@/lib/status";
 import { saveLossAnalysis } from "@/features/lost-analysis/actions";
 import { allUsers, getLoss } from "@/features/lost-analysis/queries";
-import { requirePage } from "@/lib/auth";
+import { can, requirePage } from "@/lib/auth";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 
 export default async function LossPage({ params }: { params: Promise<{ id: string }> }) {
-  await requirePage("lost_analysis");
+  const me = await requirePage("lost_analysis");
   const { id: s } = await params;
   const id = Number(s);
   const l = Number.isInteger(id) ? getLoss(id) : undefined;
@@ -54,6 +55,7 @@ export default async function LossPage({ params }: { params: Promise<{ id: strin
             <div className={`mt-1 text-2xl font-semibold tabular-nums ${l.price_gap_pct !== null && l.price_gap_pct > 0 ? "text-red-600" : "text-slate-900"}`}>{l.price_gap_pct === null ? "-" : `${l.price_gap_pct > 0 ? "+" : ""}${l.price_gap_pct.toFixed(1)}%`}</div>
             <div className="text-xs text-slate-500">{l.client_name ?? "No client"}</div>
           </Card>
+          <ApprovalPanel type="loss_analysis" documentId={l.id} path={`/lost-analysis/${l.id}`} user={me} title="Closure approval" canSubmit={can(me, "lost_analysis", "edit")} submitLabel="Submit closure for approval" />
           <AttachmentsPanel entityType="loss" entityId={l.id} revalidate={`/lost-analysis/${l.id}`} categories={["Debrief", "Evidence", "Other"]} />
           <ActivityTimeline entityType="loss" entityId={l.id} limit={20} />
         </div>

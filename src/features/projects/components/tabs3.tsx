@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge, Button, CardSection, EmptyState, Field, Input, ModalButton, Select, StatusBadge, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
+import { hasOpenRequest } from "@/lib/approvals/engine";
+import { can, type AuthUser } from "@/lib/auth";
 import { formatDate, formatMoney, formatNumber, formatRatio, getCurrency, todayISO } from "@/lib/format";
 import { getDelayAttribution, getSubcontractorPerformance } from "@/lib/metrics";
 import { statusLabel, statusOptions, statusHex } from "@/lib/status";
@@ -52,7 +55,7 @@ function RejectForm({ id, kind }: { id: number; kind: "invoice" }) {
   );
 }
 
-export function InvoicesTab({ project }: { project: ProjectRow }) {
+export function InvoicesTab({ project, me }: { project: ProjectRow; me: AuthUser }) {
   const invoices = getInvoices(project.id);
   const certs = getCertificates(project.id);
   const asg = getAssignments(project.id).map((a) => ({ value: a.id, label: `${a.code} · ${a.subcontractor_name}` }));
@@ -81,9 +84,11 @@ export function InvoicesTab({ project }: { project: ProjectRow }) {
                     <div className="flex flex-wrap items-center gap-1">
                       {i.status === "submitted" && <form action={startInvoiceReview}><input type="hidden" name="id" value={i.id} /><Button type="submit" size="sm">Review</Button></form>}
                       {["submitted", "under_review"].includes(i.status) && <ModalButton label="Certify" title={`Certify ${i.invoice_no}`} variant="primary" size="sm"><CertifyForm i={i} /></ModalButton>}
-                      {i.status === "certified" && <form action={approveInvoice}><input type="hidden" name="id" value={i.id} /><Button type="submit" variant="success" size="sm">Approve</Button></form>}
+                      {i.status === "certified" && !hasOpenRequest("sub_invoice", i.id) && can(me, "invoices", "approve") && <form action={approveInvoice}><input type="hidden" name="id" value={i.id} /><Button type="submit" variant="success" size="sm">Request approval</Button></form>}
                       {i.status === "certified" && <ModalButton label="Re-certify" title={`Re-certify ${i.invoice_no}`} variant="ghost" size="sm"><CertifyForm i={i} /></ModalButton>}
-                      {i.status === "approved" && <ModalButton label="Pay" title={`Pay ${i.invoice_no}`} variant="success" size="sm"><PayForm i={i} /></ModalButton>}
+                      {i.status === "approved" && !hasOpenRequest("invoice_payment", i.id) && <ModalButton label="Pay" title={`Pay ${i.invoice_no}`} variant="success" size="sm"><PayForm i={i} /></ModalButton>}
+                      <ApprovalPanel compact label="Invoice approval" type="sub_invoice" documentId={i.id} path={`/projects/${project.id}?tab=invoices`} user={me} title={`Invoice approval ${i.invoice_no ?? i.id}`} />
+                      <ApprovalPanel compact label="Payment approval" type="invoice_payment" documentId={i.id} path={`/projects/${project.id}?tab=invoices`} user={me} title={`Payment approval ${i.invoice_no ?? i.id}`} />
                       {!["paid", "rejected"].includes(i.status) && <ModalButton label="Reject" title={`Reject ${i.invoice_no}`} variant="ghost" size="sm"><RejectForm id={i.id} kind="invoice" /></ModalButton>}
                     </div>
                   </TD>
@@ -113,7 +118,8 @@ export function InvoicesTab({ project }: { project: ProjectRow }) {
                   <TD><StatusBadge kind="certStatus" value={c.status} />{c.issuer_name && c.status === "issued" && <div className="text-xs text-slate-400">{c.issuer_name}</div>}</TD>
                   <TD>
                     <div className="flex gap-1">
-                      {["draft", "requested", "rejected"].includes(c.status) && <form action={issueCertificate}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="success" size="sm">Issue</Button></form>}
+                      <ApprovalPanel compact label="Issue approval" type="completion_certificate" documentId={c.id} path={`/projects/${project.id}?tab=invoices`} user={me} title={`Certificate approval ${c.cert_no ?? c.id}`} />
+                      {["draft", "requested", "rejected"].includes(c.status) && !hasOpenRequest("completion_certificate", c.id) && <form action={issueCertificate}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="success" size="sm">Issue</Button></form>}
                       {["draft", "requested"].includes(c.status) && <form action={rejectCertificate}><input type="hidden" name="id" value={c.id} /><ConfirmButton message="Reject this certificate?" variant="ghost">Reject</ConfirmButton></form>}
                     </div>
                   </TD>

@@ -12,6 +12,7 @@ import { clientProjects, clientTenders, getClient } from "@/features/clients/que
 import { ClientForm } from "@/features/clients/ClientForm";
 import { deleteClient } from "@/features/clients/actions";
 import { can, requirePage } from "@/lib/auth";
+import ActionForm from "@/components/ActionForm";
 
 export default async function ClientPage({ params }: { params: Promise<{ id: string }> }) {
   const me = await requirePage("clients");
@@ -25,7 +26,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
       <PageHeader title={c.name} breadcrumbs={[{ label: "Clients", href: "/clients" }, { label: c.name }]} badges={<StatusBadge kind="clientType" value={c.type} />}
         actions={<>
           {can(me, "clients", "edit") && <ModalButton label="Edit" title="Edit client" wide><ClientForm client={c} /></ModalButton>}
-          {can(me, "clients", "delete") && <form action={deleteClient}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="danger">Delete</Button></form>}
+          {can(me, "clients", "delete") && <ActionForm action={deleteClient}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="danger">Delete</Button></ActionForm>}
         </>} />
       <CardSection title="Contact" className="mb-5">
         <dl className="grid gap-3 text-sm sm:grid-cols-4">

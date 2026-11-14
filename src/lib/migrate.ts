@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import type { DB } from "./db";
 import { LEGACY_ROLE_MAP, SYSTEM_ROLES } from "./role-defaults";
+import { installDefaultWorkflows } from "./approvals/defaults";
 
 export const DEMO_ADMIN_EMAIL = "admin@alnoor.demo";
 export const DEMO_ADMIN_PASSWORD = "Admin@12345";
@@ -58,6 +59,23 @@ export function migrate(db: DB): void {
         if (i === 0) { sets.push("email = ?"); params.push(DEMO_ADMIN_EMAIL); }
         db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`).run(...params, u.id);
       });
+    })();
+  }
+
+  // Approval engine (AUTH_SPEC section D): tables come from schema.sql (IF NOT EXISTS); install the default workflows once on an
+  // existing database that already has users and roles (an empty database gets them from the seed).
+  const haveUsers = (db.prepare("SELECT COUNT(*) c FROM users").get() as { c: number }).c > 0;
+  const haveRoles = (db.prepare("SELECT COUNT(*) c FROM roles").get() as { c: number }).c > 0;
+  const haveWf = (db.prepare("SELECT COUNT(*) c FROM approval_workflows").get() as { c: number }).c > 0;
+  if (haveUsers && haveRoles && !haveWf) installDefaultWorkflows(db);
+
+  // One-time backfill: every role that can view projects also gets the Live Ops Map (guarded by a settings flag so a later manual revoke sticks).
+  const flag = db.prepare("SELECT value FROM settings WHERE key = 'migr_ops_map_view'").get();
+  if (!flag && haveRoles) {
+    db.transaction(() => {
+      db.prepare(`INSERT OR IGNORE INTO role_permissions(role_id, module, action)
+                  SELECT role_id, 'ops_map', 'view' FROM role_permissions WHERE module = 'projects' AND action = 'view'`).run();
+      db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_ops_map_view', '1')").run();
     })();
   }
 }

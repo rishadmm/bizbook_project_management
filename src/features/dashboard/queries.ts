@@ -46,17 +46,12 @@ export function portfolioTotals(items: ProjectHealth[]): Portfolio {
   return { ...t, spi: t.pv > 0 ? t.ev / t.pv : null, cpi: t.ac > 0 ? t.ev / t.ac : null, count: items.length };
 }
 
-export interface PendingReview { id: number; tender_id: number; code: string; title: string; department: string | null }
 export interface PendingProgress { id: number; project_id: number; project_code: string; report_date: string; subcontractor_name: string; assignment_code: string | null }
 export interface PendingInvoice { id: number; invoice_no: string | null; claimed_amount: number; status: string; subcontractor_name: string; project_code: string }
 export interface PendingCert { id: number; cert_type: string; percent: number | null; subcontractor_name: string; project_code: string; assignment_code: string | null }
 
-export function pendingApprovals(departmentId: number | null) {
+export function pendingApprovals() {
   const db = getDb();
-  const reviews = departmentId === null ? [] : db.prepare(`
-    SELECT r.id, t.id AS tender_id, t.code, t.title, d.name AS department FROM tender_reviews r
-    JOIN tenders t ON t.id = r.tender_id LEFT JOIN departments d ON d.id = r.department_id
-    WHERE r.decision = 'pending' AND r.department_id = ? AND t.status = 'under_review' ORDER BY t.submission_deadline`).all(departmentId) as PendingReview[];
   const progress = db.prepare(`
     SELECT r.id, r.project_id, p.code AS project_code, r.report_date, s.name AS subcontractor_name, a.code AS assignment_code FROM progress_reports r
     JOIN projects p ON p.id = r.project_id LEFT JOIN assignments a ON a.id = r.assignment_id LEFT JOIN subcontractors s ON s.id = a.subcontractor_id
@@ -69,7 +64,7 @@ export function pendingApprovals(departmentId: number | null) {
     SELECT c.id, c.cert_type, c.percent, s.name AS subcontractor_name, p.code AS project_code, a.code AS assignment_code FROM completion_certificates c
     JOIN assignments a ON a.id = c.assignment_id JOIN subcontractors s ON s.id = a.subcontractor_id JOIN projects p ON p.id = c.project_id
     WHERE c.status = 'requested' ORDER BY c.id DESC LIMIT 50`).all() as PendingCert[];
-  return { reviews, progress, invoices, certs };
+  return { progress, invoices, certs };
 }
 
 export interface ExpiringDoc { id: number; subcontractor_id: number; name: string; doc_type: string; expiry_date: string; days: number }

@@ -12,7 +12,8 @@ import { OverviewTab } from "@/features/tenders/components/OverviewTab";
 import { DepartmentsTab } from "@/features/tenders/components/DepartmentsTab";
 import { BudgetWorkspace } from "@/features/tenders/components/BudgetWorkspace";
 import { CommercialTab } from "@/features/tenders/components/CommercialTab";
-import { ReviewsTab } from "@/features/tenders/components/ReviewsTab";
+import { ApprovalsTab } from "@/features/tenders/components/ApprovalsTab";
+import { hasOpenRequest } from "@/lib/approvals/engine";
 
 export default async function TenderPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const me = await requirePage("tenders");
@@ -27,7 +28,7 @@ export default async function TenderPage({ params, searchParams }: { params: Pro
   const tabs = [
     { key: "overview", label: "Overview" }, { key: "departments", label: "Departments", count: sections.length },
     ...(can(me, "tender_budget", "view") ? [{ key: "budget", label: "Budget / BOQ" }] : []), { key: "commercial", label: "Commercial & Negotiation" },
-    { key: "reviews", label: "Reviews", count: reviews.filter((r) => r.revision_id === tender.current_revision_id).length }, { key: "documents", label: "Documents" }, { key: "activity", label: "Activity" },
+    { key: "approvals", label: "Approvals" }, { key: "documents", label: "Documents" }, { key: "activity", label: "Activity" },
   ];
   const tab = resolveTab(sp, tabs, "overview");
   const { clients, users, departments } = lookups();
@@ -41,14 +42,14 @@ export default async function TenderPage({ params, searchParams }: { params: Pro
         description={`${tender.code} · ${tender.client_name ?? "No client"}${revision ? ` · current revision ${revision.label}` : ""}`} />
       <Tabs tabs={tabs} active={tab} basePath={`/tenders/${id}`} />
       {tab === "overview" && <OverviewTab tender={tender} revision={revision} users={users} clients={clients} currentUser={me}
-        incompleteSections={sections.filter((s) => s.status !== "completed").length} totalSections={sections.length} />}
+        incompleteSections={sections.filter((s) => s.status !== "completed").length} totalSections={sections.length} awardPending={hasOpenRequest("tender_award", id)} />}
       {tab === "departments" && <DepartmentsTab tenderId={id} sections={sections} users={users} departments={departments} locked={closed || !can(me, "tenders", "edit")} />}
       {tab === "budget" && (revision
         ? <BudgetWorkspace key={revision.id} initialLines={getBudgetLines(revision.id)} revisionId={revision.id} revisionLabel={revision.label ?? `R${revision.rev_no}`}
             editable={revision.status === "draft" && !closed && can(me, "tender_budget", "edit")} readOnlyReason={closed ? `tender is ${tender.status}` : `revision ${revision.label} is ${revision.status}`} tenderCode={tender.code} currency={getCurrency()} />
         : <p className="text-sm text-slate-500">This tender has no revision.</p>)}
-      {tab === "commercial" && <CommercialTab tender={tender} revisions={revisions} negotiations={getNegotiations(id)} changes={getMarginChanges(id)} currency={getCurrency()} />}
-      {tab === "reviews" && <ReviewsTab tender={tender} reviews={reviews} currentUser={me} />}
+      {tab === "commercial" && <CommercialTab tender={tender} revisions={revisions} negotiations={getNegotiations(id)} changes={getMarginChanges(id)} currency={getCurrency()} me={me} />}
+      {tab === "approvals" && <ApprovalsTab tender={tender} revision={revision} reviews={reviews} me={me} />}
       {tab === "documents" && <AttachmentsPanel entityType="tender" entityId={id} revalidate={`/tenders/${id}`} />}
       {tab === "activity" && <ActivityTimeline entityType="tender" entityId={id} />}
     </>

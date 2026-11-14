@@ -7,13 +7,13 @@ export type ButtonSize = "sm" | "md";
 
 export function buttonClass(variant: ButtonVariant = "secondary", size: ButtonSize = "md", extra?: string): string {
   return cn(
-    "inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 disabled:pointer-events-none",
-    size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm",
-    variant === "primary" && "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
-    variant === "success" && "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm",
-    variant === "secondary" && "bg-white text-slate-700 border border-slate-300 hover:bg-slate-50",
-    variant === "danger" && "bg-white text-red-600 border border-red-300 hover:bg-red-50",
-    variant === "ghost" && "text-slate-600 hover:bg-slate-100",
+    "inline-flex items-center justify-center gap-1.5 rounded-[10px] font-bold whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:opacity-50 disabled:pointer-events-none",
+    size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm",
+    variant === "primary" && (size === "sm" ? "bg-primary text-white shadow-brand-sm hover:bg-primary-dark" : "bg-primary text-white shadow-brand hover:bg-primary-dark"),
+    variant === "success" && "bg-success text-white hover:bg-green-600 shadow-sm",
+    variant === "secondary" && "bg-white text-primary border-[1.5px] border-primary hover:bg-primary-50",
+    variant === "danger" && "bg-white text-red-600 border-[1.5px] border-red-300 hover:bg-red-50",
+    variant === "ghost" && "text-slate-600 hover:bg-primary-50 hover:text-primary",
     extra,
   );
 }

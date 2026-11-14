@@ -1,15 +1,16 @@
 "use client";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { compactNumber, formatDate } from "@/lib/format";
+import { CHART } from "@/lib/theme";
 
-const BLUE = "#2563eb", SLATE = "#94a3b8", GREEN = "#16a34a", RED = "#dc2626";
+const BLUE = CHART.actual, SLATE = "#94a3b8", GREEN = CHART.positive, RED = CHART.negative;
 
 export function SCurveChart({ data, today }: { data: { date: string; planned: number; actual: number | null }[]; today: string }) {
   return (
     <div style={{ width: "100%", height: 280 }}>
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d: string) => formatDate(d).slice(0, 6)} minTickGap={32} />
           <YAxis tick={{ fontSize: 11 }} domain={[0, 100]} unit="%" width={40} />
           <Tooltip formatter={(v) => (typeof v === "number" ? `${v.toFixed(1)}%` : "—")} labelFormatter={(d) => formatDate(String(d))} />
@@ -28,7 +29,7 @@ export function BudgetActualChart({ data, currency, labelKey = "label" }: { data
     <div style={{ width: "100%", height: 280 }}>
       <ResponsiveContainer>
         <BarChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
           <XAxis dataKey={labelKey} tick={{ fontSize: 11, angle: -35, textAnchor: "end" }} interval={0} height={56} tickMargin={4} />
           <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => compactNumber(v)} width={52} />
           <Tooltip formatter={(v) => (typeof v === "number" ? `${currency} ${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—")} />
@@ -46,7 +47,7 @@ export function DelayBarChart({ data, valueLabel, color = RED, currency }: { dat
     <div style={{ width: "100%", height: Math.max(180, data.length * 38 + 40) }}>
       <ResponsiveContainer>
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, bottom: 0, left: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v: number) => (currency ? compactNumber(v) : String(v))} />
           <YAxis type="category" dataKey="label" tick={{ fontSize: 11 }} width={110} />
           <Tooltip formatter={(v) => (typeof v === "number" ? (currency ? `${currency} ${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : `${v.toFixed(1)} ${valueLabel}`) : "—")} />
@@ -62,7 +63,7 @@ export function StageHistoryChart({ data }: { data: { date: string; percent: num
     <div style={{ width: "100%", height: 240 }}>
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d: string) => formatDate(d).slice(0, 6)} minTickGap={28} />
           <YAxis yAxisId="l" tick={{ fontSize: 11 }} domain={[0, 100]} unit="%" width={40} />
           <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11 }} width={44} />

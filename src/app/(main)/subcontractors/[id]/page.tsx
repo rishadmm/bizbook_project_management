@@ -16,10 +16,12 @@ import {
 } from "@/features/subcontractors/queries";
 import { ProfileForm } from "@/features/subcontractors/components/ProfileForm";
 import { DocumentForm } from "@/features/subcontractors/components/DocumentForm";
-import { requirePage } from "@/lib/auth";
+import { can, requirePage } from "@/lib/auth";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
+import { hasOpenRequest } from "@/lib/approvals/engine";
 
 export default async function SubcontractorPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
-  await requirePage("subcontractors");
+  const me = await requirePage("subcontractors");
   const { id: rawId } = await params;
   const id = Number(rawId);
   const sub = Number.isInteger(id) ? getSubcontractor(id) : undefined;
@@ -70,12 +72,12 @@ export default async function SubcontractorPage({ params, searchParams }: { para
 
       {tab === "onboarding" && (
         <CardSection title="Onboarding checklist" subtitle={`${checklist.filter((c) => c.done).length} of ${checklist.length} completed`}
-          actions={sub.status === "onboarding" || sub.status === "prospect" ? (
+          actions={sub.status === "onboarding" || sub.status === "prospect" ? (hasOpenRequest("subcontractor_onboarding", id) ? <Badge tone="amber">Approval pending</Badge> : can(me, "subcontractors", "approve") ? (
             <form action={approveSubcontractor}>
               <input type="hidden" name="id" value={id} />
               <Button type="submit" variant="success" disabled={!allDone} title={allDone ? "" : "Complete all items first"}><ShieldCheck size={14} />Approve subcontractor</Button>
             </form>
-          ) : <StatusBadge kind="subcontractorStatus" value={sub.status} />}>
+          ) : undefined) : <StatusBadge kind="subcontractorStatus" value={sub.status} />}>
           <ul className="divide-y divide-slate-100">
             {checklist.map((c) => (
               <li key={c.id} className="flex items-center gap-3 py-2.5">
@@ -99,6 +101,8 @@ export default async function SubcontractorPage({ params, searchParams }: { para
           )}
         </CardSection>
       )}
+
+      {tab === "onboarding" && <div className="mt-5"><ApprovalPanel type="subcontractor_onboarding" documentId={id} path={`/subcontractors/${id}?tab=onboarding`} user={me} title="Onboarding approval" canSubmit={false} /></div>}
 
       {tab === "documents" && (
         <CardSection title="Documents" flush actions={<ModalButton label="Add document" title="Add document" variant="primary" size="sm" wide><DocumentForm subcontractorId={id} /></ModalButton>}>

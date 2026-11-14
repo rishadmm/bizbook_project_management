@@ -9,6 +9,9 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
 import { formatDate, formatDateTime, formatMoney, pct, todayISO } from "@/lib/format";
 import { statusOptions } from "@/lib/status";
 import type { TenderRevision } from "@/lib/types";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
+import { hasOpenRequest } from "@/lib/approvals/engine";
+import { can, type AuthUser } from "@/lib/auth";
 import { createRevision, deleteNegotiation, saveNegotiation, saveRevisionFeedback, submitRevision } from "../actions";
 import type { MarginChangeRow, NegotiationRow, TenderDetail } from "../queries";
 import { NegotiationChart, type NegPoint } from "./NegotiationChart";
@@ -37,19 +40,20 @@ function NegForm({ tender, revisions, n }: { tender: TenderDetail; revisions: Te
   );
 }
 
-export function CommercialTab({ tender, revisions, negotiations, changes, currency }: {
-  tender: TenderDetail; revisions: TenderRevision[]; negotiations: NegotiationRow[]; changes: MarginChangeRow[]; currency: string;
+export function CommercialTab({ tender, revisions, negotiations, changes, currency, me }: {
+  tender: TenderDetail; revisions: TenderRevision[]; negotiations: NegotiationRow[]; changes: MarginChangeRow[]; currency: string; me: AuthUser;
 }) {
   const cur = revisions.find((r) => r.id === tender.current_revision_id);
   const canNew = ["submitted", "negotiation"].includes(tender.status) && cur && cur.status !== "draft";
-  const canSubmitRev = ["submitted", "negotiation"].includes(tender.status) && cur?.status === "draft" && cur.rev_no > 0;
+  const revPending = !!cur && hasOpenRequest("tender_revision", cur.id);
+  const canSubmitRev = ["submitted", "negotiation"].includes(tender.status) && cur?.status === "draft" && cur.rev_no > 0 && !revPending && can(me, "tenders", "submit");
   const chart: NegPoint[] = negotiations.length
     ? negotiations.map((n) => ({ name: `${formatDate(n.date)} (${n.rev_label ?? "-"})`, ours: n.rev_price, target: n.client_target_price }))
     : revisions.map((r) => ({ name: r.label ?? `R${r.rev_no}`, ours: r.total_price, target: null }));
   return (
     <div className="space-y-5">
       <CardSection title="Revision comparison" flush actions={<div className="flex gap-2">
-        {canSubmitRev && <form action={submitRevision}><input type="hidden" name="tender_id" value={tender.id} /><Button type="submit" size="sm" variant="primary">Submit {cur?.label} to client</Button></form>}
+        {canSubmitRev && <form action={submitRevision}><input type="hidden" name="tender_id" value={tender.id} /><Button type="submit" size="sm" variant="primary">Submit {cur?.label} for approval</Button></form>}
         {canNew && <ModalButton label="Create new revision" title="Create new revision" size="sm" variant="primary">
           <form action={createRevision} className="space-y-3">
             <input type="hidden" name="tender_id" value={tender.id} />
@@ -88,6 +92,10 @@ export function CommercialTab({ tender, revisions, negotiations, changes, curren
           </TBody>
         </Table>
       </CardSection>
+
+      {cur && cur.rev_no > 0 && ["submitted", "negotiation"].includes(tender.status) && (
+        <ApprovalPanel type="tender_revision" documentId={cur.id} path={`/tenders/${tender.id}?tab=commercial`} user={me} title={`Revision ${cur.label} approval`} canSubmit={false} />
+      )}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <CardSection title="Client target vs our price" subtitle="Our price is the revision linked to each negotiation entry"><NegotiationChart data={chart} currency={currency} /></CardSection>

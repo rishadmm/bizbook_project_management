@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import path from "node:path";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3100";
-const one = <T,>(sql: string, ...p: unknown[]) => { const d = new Database(path.join(process.cwd(), "data", "ops.db"), { readonly: true }); try { return d.prepare(sql).get(...p) as T; } finally { d.close(); } };
+const one = <T,>(sql: string, ...p: unknown[]) => { const d = new Database((process.env.OPS_DB_PATH ?? path.join(process.cwd(), "data", "ops.db")), { readonly: true }); try { return d.prepare(sql).get(...p) as T; } finally { d.close(); } };
 
 async function fresh(browser: Browser): Promise<Page> {
   const c = await browser.newContext({ baseURL: BASE, viewport: { width: 1440, height: 900 } });
@@ -36,19 +36,19 @@ test.describe.serial("authentication and access control", () => {
   test("wrong password shows a generic error", async ({ browser }) => {
     const page = await fresh(browser);
     await login(page, "admin@alnoor.demo", "nope-nope");
-    await expect(page.getByRole("alert")).toContainText("Invalid email or password");
+    await expect(page.locator("p[role=alert]")).toContainText("Invalid email or password");
     await login(page, "ghost@nowhere.test", "nope-nope");
-    await expect(page.getByRole("alert")).toContainText("Invalid email or password");
+    await expect(page.locator("p[role=alert]")).toContainText("Invalid email or password");
     await page.context().close();
   });
 
   test("account locks after 5 failed attempts and an admin can unlock it", async ({ browser }) => {
     const email = VIEWER();
     const page = await fresh(browser);
-    for (let i = 0; i < 5; i++) { await login(page, email, "wrong-Password1"); await expect(page.getByRole("alert")).toBeVisible(); }
-    await expect(page.getByRole("alert")).toContainText(/locked/i);
+    for (let i = 0; i < 5; i++) { await login(page, email, "wrong-Password1"); await expect(page.locator("p[role=alert]")).toBeVisible(); }
+    await expect(page.locator("p[role=alert]")).toContainText(/locked/i);
     await login(page, email, "Password@123"); // correct password is refused while locked
-    await expect(page.getByRole("alert")).toContainText(/locked/i);
+    await expect(page.locator("p[role=alert]")).toContainText(/locked/i);
     await expect(page).toHaveURL(/\/login/);
     // admin unlocks
     const admin = await fresh(browser);

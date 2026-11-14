@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { ExternalLink, Pencil, Plus, Trash2, Check, X } from "lucide-react";
 import { Badge, Button, CardSection, EmptyState, ModalButton, ProgressBar, Select, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
+import { can, type AuthUser } from "@/lib/auth";
+import { getDb } from "@/lib/db";
 import { formatDate, formatMoney, formatNumber, pct, todayISO, getCurrency } from "@/lib/format";
 import { statusLabel, statusOptions } from "@/lib/status";
 import { deleteAssignment, deleteManualCost, regeneratePortalToken, rejectProgressReport, setPortalEnabled, verifyProgressReport } from "../actions";
@@ -20,7 +23,7 @@ const stageOpts = (stages: StageRowEx[]) => stages.map((s) => ({ value: s.id, la
 
 /* ------------------------------------------------------------------ Subcontracts */
 
-export function SubcontractsTab({ project, stages }: { project: ProjectRow; stages: StageRowEx[] }) {
+export function SubcontractsTab({ project, stages, me }: { project: ProjectRow; stages: StageRowEx[]; me: AuthUser }) {
   const rows = getAssignments(project.id);
   const subs = listSubcontractors().map((s) => ({ value: s.id, label: `${s.name}${s.trade ? ` (${s.trade})` : ""}${s.status !== "approved" ? ` – ${s.status}` : ""}` }));
   const so = stageOpts(stages);
@@ -42,7 +45,7 @@ export function SubcontractsTab({ project, stages }: { project: ProjectRow; stag
                 <TD className="whitespace-nowrap text-xs">Adv {a.advance_pct}% · Ret {a.retention_pct}% · {a.payment_days}d</TD>
                 <TD><ProgressBar value={a.progress.actualPct} planned={a.progress.plannedPct} tone={barTone(a.progress.spi === null ? "grey" : a.progress.spi >= 0.95 ? "green" : a.progress.spi >= 0.85 ? "amber" : "red")} showLabel /></TD>
                 <TD num className="text-xs">{formatMoney(a.progress.certified, { compact: true })}<div className="text-slate-400">{formatMoney(a.progress.paid, { compact: true })}</div></TD>
-                <TD><StatusBadge kind="assignmentStatus" value={a.status} /></TD>
+                <TD><div className="flex flex-col items-start gap-1"><StatusBadge kind="assignmentStatus" value={a.status} /><ApprovalPanel compact label="Award" type="subcontract_award" documentId={a.id} path={`/projects/${project.id}?tab=subcontracts`} user={me} canSubmit={can(me, "subcontractors", "edit") && a.status === "draft"} title={`Award approval ${a.code ?? ""}`} /></div></TD>
                 <TD>
                   <div className="flex flex-col items-start gap-1">
                     <form action={setPortalEnabled}>
@@ -148,7 +151,7 @@ export function ProgressTab({ project, stages, filters }: { project: ProjectRow;
 
 /* ------------------------------------------------------------------ Budget & cost */
 
-export function BudgetTab({ project, stages }: { project: ProjectRow; stages: StageRowEx[] }) {
+export function BudgetTab({ project, stages, me }: { project: ProjectRow; stages: StageRowEx[]; me: AuthUser }) {
   const cats = getBudgetByCategory(project.id);
   const byStage = getBudgetByStage(project.id);
   const lines = getBudgetLines(project.id);
@@ -158,6 +161,7 @@ export function BudgetTab({ project, stages }: { project: ProjectRow; stages: St
   const actual = cats.reduce((a, c) => a + c.actual, 0);
   const so = stageOpts(stages);
   const data = cats.map((c) => ({ label: statusLabel("budgetCategory", c.category), budget: c.budget, actual: c.actual }));
+  const pendingCosts = getDb().prepare("SELECT * FROM project_cost_requests WHERE project_id = ? AND status = 'pending' ORDER BY id DESC").all(project.id) as { id: number; category: string; description: string | null; amount: number; cost_date: string | null }[];
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -211,6 +215,20 @@ export function BudgetTab({ project, stages }: { project: ProjectRow; stages: St
           </Table>
         )}
       </CardSection>
+
+      {pendingCosts.length > 0 && (
+        <CardSection title="Costs awaiting approval" subtitle="Manual costs above the approval threshold are posted to the ledger once approved" flush>
+          <Table>
+            <THead><TR><TH>Date</TH><TH>Category</TH><TH>Description</TH><TH num>Amount</TH><TH>Approval</TH></TR></THead>
+            <TBody>
+              {pendingCosts.map((c) => (
+                <TR key={c.id}><TD className="whitespace-nowrap">{formatDate(c.cost_date)}</TD><TD><StatusBadge kind="budgetCategory" value={c.category} /></TD><TD>{c.description}</TD><TD num>{formatMoney(c.amount)}</TD>
+                  <TD><ApprovalPanel compact label="Cost approval" type="project_cost" documentId={c.id} path={`/projects/${project.id}?tab=budget`} user={me} title={`Cost approval: ${c.description ?? ""}`} /></TD></TR>
+              ))}
+            </TBody>
+          </Table>
+        </CardSection>
+      )}
 
       <CardSection title="Budget lines" subtitle={`${lines.length} lines converted from the tender`} flush>
         {lines.length === 0 ? <div className="p-4"><EmptyState title="No budget lines" /></div> : (

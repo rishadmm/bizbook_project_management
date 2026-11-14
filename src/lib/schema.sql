@@ -327,3 +327,59 @@ CREATE INDEX IF NOT EXISTS idx_pc_source ON project_costs(source_type, source_id
 CREATE INDEX IF NOT EXISTS idx_issue_project ON issues(project_id);
 CREATE INDEX IF NOT EXISTS idx_issue_stage ON issues(stage_id);
 CREATE INDEX IF NOT EXISTS idx_issue_asg ON issues(assignment_id);
+
+-- ---------------------------------------------------------------- Multi-level approval workflows (AUTH_SPEC section D)
+CREATE TABLE IF NOT EXISTS approval_workflows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, document_type TEXT NOT NULL, name TEXT NOT NULL, description TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0,
+  condition_min_amount REAL, condition_max_amount REAL, condition_department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+  condition_project_category TEXT, created_by INTEGER, updated_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_aw_type ON approval_workflows(document_type, is_active);
+CREATE TABLE IF NOT EXISTS approval_levels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER NOT NULL REFERENCES approval_workflows(id) ON DELETE CASCADE,
+  level_no INTEGER NOT NULL, name TEXT NOT NULL,
+  approver_type TEXT NOT NULL CHECK (approver_type IN ('role','user','department','department_head','project_manager','requester_manager')),
+  approver_role_id INTEGER, approver_user_id INTEGER, approver_department_id INTEGER,
+  approval_mode TEXT NOT NULL DEFAULT 'any' CHECK (approval_mode IN ('any','all','min')), min_approvals INTEGER NOT NULL DEFAULT 1,
+  min_amount REAL, sla_hours INTEGER NOT NULL DEFAULT 48, allow_self_approval INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_al_wf ON approval_levels(workflow_id);
+CREATE TABLE IF NOT EXISTS approval_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, document_type TEXT NOT NULL, document_id INTEGER NOT NULL, document_ref TEXT, title TEXT,
+  amount REAL NOT NULL DEFAULT 0, workflow_id INTEGER REFERENCES approval_workflows(id), current_level INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','returned','cancelled')),
+  requested_by INTEGER, requested_at TEXT NOT NULL, completed_at TEXT, note TEXT,
+  levels_json TEXT, payload TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ar_doc ON approval_requests(document_type, document_id);
+CREATE INDEX IF NOT EXISTS idx_ar_by ON approval_requests(requested_by);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_one_open ON approval_requests(document_type, document_id) WHERE status = 'pending';
+CREATE TABLE IF NOT EXISTS approval_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  level_no INTEGER NOT NULL, assignee_user_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','returned','skipped')),
+  decision_comment TEXT, decided_at TEXT, decided_by INTEGER, delegated_from_user_id INTEGER, due_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_at_req ON approval_tasks(request_id);
+CREATE INDEX IF NOT EXISTS idx_at_assignee ON approval_tasks(assignee_user_id, status);
+CREATE TABLE IF NOT EXISTS approval_delegations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, delegate_user_id INTEGER NOT NULL,
+  start_date TEXT NOT NULL, end_date TEXT NOT NULL, document_types TEXT, is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ad_user ON approval_delegations(user_id);
+CREATE TABLE IF NOT EXISTS approval_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, request_id INTEGER NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+  level_no INTEGER, event TEXT NOT NULL, user_id INTEGER, comment TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ae_req ON approval_events(request_id);
+-- Manual project costs above the approval threshold wait here until approved (then posted to project_costs).
+CREATE TABLE IF NOT EXISTS project_cost_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, stage_id INTEGER,
+  category TEXT NOT NULL, description TEXT, amount REAL NOT NULL, cost_date TEXT, created_by INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pcr_project ON project_cost_requests(project_id);

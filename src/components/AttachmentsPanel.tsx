@@ -33,7 +33,7 @@ export function AttachmentsPanel({ entityType, entityId, revalidate, categories,
             <li key={a.id} className="flex items-center gap-3 py-2.5">
               <FileText size={18} className="shrink-0 text-slate-400" />
               <div className="min-w-0 flex-1">
-                <a href={`/api/files/${a.id}`} target="_blank" className="block truncate text-sm font-medium text-blue-700 hover:underline">{a.filename}</a>
+                <a href={`/api/files/${a.id}`} target="_blank" className="block truncate text-sm font-medium text-primary-dark hover:underline">{a.filename}</a>
                 <div className="text-xs text-slate-500">{size(a.size)} · {formatDateTime(a.created_at)}{a.uploader_name ? ` · ${a.uploader_name}` : ""}{a.note ? ` · ${a.note}` : ""}</div>
               </div>
               {a.category && <Badge>{a.category}</Badge>}

@@ -11,8 +11,10 @@ import { getProjectMetrics, refreshRevisionTotals, syncInvoiceCost, syncProgress
 import { ensureSystemRoles, DEMO_ADMIN_EMAIL, DEMO_ADMIN_PASSWORD, DEMO_USER_PASSWORD } from "./migrate";
 import { hashPassword } from "./password";
 import { DEFAULT_ONBOARDING_ITEMS, DEFAULT_TENDER_SECTIONS, DEPARTMENTS } from "./status";
+import { installDefaultWorkflows } from "./approvals/defaults";
+import { seedApprovalDemo } from "./approvals/seed-demo";
 
-const UPLOADS = path.join(process.cwd(), "uploads");
+const UPLOADS = process.env.OPS_UPLOAD_DIR ?? path.join(process.cwd(), "uploads");
 fs.rmSync(UPLOADS, { recursive: true, force: true });
 fs.mkdirSync(UPLOADS, { recursive: true });
 
@@ -81,6 +83,8 @@ const USERS = [
   ["Omar Al Farsi", "admin", "Management", "super_admin", 0], ["Layla Hassan", "manager", "Operations", "project_manager", 1], ["Rahul Menon", "estimator", "Commercial", "estimator", 1],
   ["Sara Khalid", "engineer", "Technical", "engineer", 2], ["Imran Qureshi", "finance", "Finance", "finance", 1], ["Fatima Al Ali", "hr", "HR", "hr", 1],
   ["Daniel Cruz", "engineer", "Operations", "engineer", 2], ["Aisha Rahman", "manager", "Procurement", "procurement", 1], ["Tariq Mahmood", "engineer", "HSE", "engineer", 2], ["Noura Saeed", "viewer", "Management", "viewer", 1],
+  // approval approvers: a Management-role user (GM level) and a second finance user (so finance requests have a different approver)
+  ["Hamdan Al Zaabi", "manager", "Management", "management", 1], ["Mariam Khoury", "finance", "Finance", "finance", 5],
 ] as const;
 ensureSystemRoles(db);
 const ROLE_ID: Record<string, number> = Object.fromEntries(q<{ id: number; code: string }>("SELECT id, code FROM roles").map((r) => [r.code, r.id]));
@@ -731,12 +735,19 @@ tenderIds.forEach((tid, i) => {
   if (i < 9) saveSeedFile("tender", tid, "RFP", `RFP-${TENDERS[i].category}-${i + 1}.txt`, `Demo RFP summary: ${TENDERS[i].title}\nScope: ${TENDERS[i].scope}`, U[3], off(TENDERS[i].issue + 1));
 });
 
+/* ---------------------------------------------------------------- approval workflows + demo requests (AUTH_SPEC sections D/E) */
+installDefaultWorkflows(db, U[1]);
+seedApprovalDemo(db, { sara: U[4], daniel: U[7], imran: U[5], mariam: U[12], rahul: U[3], layla: U[2], omar: U[1], hamdan: U[11] });
+
 /* ---------------------------------------------------------------- summary */
 const count = (t: string) => (q1<any>(`SELECT COUNT(*) c FROM ${t}`)!).c;
 console.log("\nSeed summary:");
 for (const t of ["departments", "users", "clients", "tenders", "tender_sections", "tender_revisions", "budget_lines", "margin_changes", "tender_reviews", "negotiations", "loss_analyses", "projects", "stages", "project_budget_lines",
-  "subcontractors", "subcontractor_documents", "onboarding_checklist", "assignments", "progress_reports", "progress_materials", "progress_manpower", "sub_invoices", "completion_certificates", "project_costs", "issues", "attachments", "activity_log"])
+  "subcontractors", "subcontractor_documents", "onboarding_checklist", "assignments", "progress_reports", "progress_materials", "progress_manpower", "sub_invoices", "completion_certificates", "project_costs", "issues", "attachments", "activity_log", "approval_workflows", "approval_levels", "approval_requests", "approval_tasks", "approval_delegations", "approval_events", "project_cost_requests"])
   console.log(`  ${t.padEnd(26)} ${count(t)}`);
+console.log("\nApproval requests by status:");
+for (const r of q<any>("SELECT status, COUNT(*) c FROM approval_requests GROUP BY status")) console.log(`  ${String(r.status).padEnd(10)} ${r.c}`);
+console.log(`  overdue pending tasks: ${q1<any>("SELECT COUNT(*) c FROM approval_tasks t JOIN approval_requests r ON r.id=t.request_id WHERE t.status='pending' AND r.status='pending' AND t.due_at < ?", new Date().toISOString())!.c}`);
 console.log("\nProject health:");
 for (const pid of projectIds) {
   const p = q1<any>("SELECT code, name FROM projects WHERE id=?", pid)!;

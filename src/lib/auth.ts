@@ -147,7 +147,8 @@ export async function startSession(userId: number, remember: boolean): Promise<v
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true, sameSite: "lax", path: "/", secure: process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "0",
-    maxAge: Math.floor(ttlMs / 1000),
+    // "Remember me" = persistent cookie; otherwise a browser-session cookie (server-side expiry still applies).
+    ...(remember ? { maxAge: Math.floor(ttlMs / 1000) } : {}),
   });
 }
 

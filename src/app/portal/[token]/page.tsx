@@ -10,6 +10,7 @@ import { portalCertificates, portalInvoices, portalProgressReports, resolvePorta
 import { requestPortalCertificate, submitPortalInvoice, submitProgressReport } from "@/features/portal/actions";
 import { LineRows } from "@/features/portal/components/LineRows";
 import { SubmitButton } from "@/features/portal/components/SubmitButton";
+import { BRAND, MAP_COLORS } from "@/lib/theme";
 
 type SP = { sent?: string; error?: string };
 const SENT: Record<string, string> = { progress: "Progress report submitted. It will be verified by the project team.", invoice: "Invoice submitted for review.", certificate: "Completion certificate requested." };
@@ -35,7 +36,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
 
   const geoms = stage?.geometry ? extractGeometries(stage.geometry) : extractGeometries(project.geometry);
   const features: MapFeature[] = geoms.map((g, i) => ({
-    id: `g${i}`, kind: "stage", geometry: g, color: "#2563eb", label: stage ? `${stage.code ?? ""} ${stage.name}`.trim() : project.name, progressPct: prog.actualPct,
+    id: `g${i}`, kind: "stage", geometry: g, color: BRAND.primary, label: stage ? `${stage.code ?? ""} ${stage.name}`.trim() : project.name, progressPct: prog.actualPct,
   }));
   const reports = portalProgressReports(a.id), invoices = portalInvoices(a.id), certs = portalCertificates(a.id);
   const today = todayISO();
@@ -73,7 +74,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
 
       {features.length > 0 && (
         <CardSection title="Stage map" flush>
-          <ProjectMapLazy features={features} height={300} legend={[{ label: "Remaining", color: "#94a3b8" }, { label: "Completed", color: "#16a34a" }]} />
+          <ProjectMapLazy features={features} height={300} legend={[{ label: "Remaining", color: MAP_COLORS.remaining }, { label: "Completed", color: MAP_COLORS.completed }]} />
         </CardSection>
       )}
 

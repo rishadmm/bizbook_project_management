@@ -3,7 +3,7 @@ export type Tone = "slate" | "blue" | "indigo" | "violet" | "amber" | "orange" |
 
 export const TONE_CLASSES: Record<Tone, string> = {
   slate: "bg-slate-100 text-slate-700 ring-slate-200",
-  blue: "bg-blue-50 text-blue-700 ring-blue-200",
+  blue: "bg-[#eef2ff] text-[#4f46e5] ring-[#c7d2fe]",
   indigo: "bg-indigo-50 text-indigo-700 ring-indigo-200",
   violet: "bg-violet-50 text-violet-700 ring-violet-200",
   amber: "bg-amber-50 text-amber-800 ring-amber-200",
@@ -16,9 +16,15 @@ export const TONE_CLASSES: Record<Tone, string> = {
   teal: "bg-teal-50 text-teal-700 ring-teal-200",
 };
 
+/** Dot colour per tone (soft-pill badge look). */
+export const TONE_DOT: Record<Tone, string> = {
+  slate: "bg-slate-400", blue: "bg-[#635bff]", indigo: "bg-indigo-500", violet: "bg-violet-500", amber: "bg-amber-500", orange: "bg-orange-500",
+  emerald: "bg-emerald-500", green: "bg-green-500", red: "bg-red-500", rose: "bg-rose-500", cyan: "bg-cyan-500", teal: "bg-teal-500",
+};
+
 /** Solid hex colours per tone (maps, charts). */
 export const TONE_HEX: Record<Tone, string> = {
-  slate: "#64748b", blue: "#2563eb", indigo: "#4f46e5", violet: "#7c3aed", amber: "#d97706", orange: "#ea580c",
+  slate: "#64748b", blue: "#635bff", indigo: "#4f46e5", violet: "#7c3aed", amber: "#d97706", orange: "#ea580c",
   emerald: "#059669", green: "#16a34a", red: "#dc2626", rose: "#e11d48", cyan: "#0891b2", teal: "#0d9488",
 };
 
@@ -156,4 +162,4 @@ export const statusHex = (kind: EnumKind, value: string | null | undefined): str
 export function statusOptions(kind: EnumKind): { value: string; label: string }[] {
   return Object.entries(ENUMS[kind] as EnumMap).map(([value, d]) => ({ value, label: d.label }));
 }
-export const RAG_HEX = { green: "#16a34a", amber: "#d97706", red: "#dc2626", grey: "#94a3b8" } as const;
+export const RAG_HEX = { green: "#22c55e", amber: "#f59e0b", red: "#ef4444", grey: "#94a3b8" } as const;

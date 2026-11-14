@@ -3,10 +3,11 @@ import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { statusOptions } from "@/lib/status";
 import type { Client } from "@/lib/types";
 import { saveClient } from "./actions";
+import ActionForm from "@/components/ActionForm";
 
 export function ClientForm({ client }: { client?: Client }) {
   return (
-    <form action={saveClient} className="space-y-3">
+    <ActionForm action={saveClient} className="space-y-3">
       {client && <input type="hidden" name="id" value={client.id} />}
       <div className="grid grid-cols-[1fr_160px] gap-3">
         <Field label="Name"><Input name="name" required defaultValue={client?.name} /></Field>
@@ -20,6 +21,6 @@ export function ClientForm({ client }: { client?: Client }) {
       <Field label="Address"><Input name="address" defaultValue={client?.address ?? ""} /></Field>
       <Field label="Notes"><Textarea name="notes" rows={3} defaultValue={client?.notes ?? ""} /></Field>
       <div className="flex justify-end"><Button type="submit" variant="primary">Save client</Button></div>
-    </form>
+    </ActionForm>
   );
 }

@@ -7,45 +7,50 @@ import { statusLabel } from "@/lib/status";
 import type { InvoiceStatus } from "@/lib/types";
 import { approveInvoice, certifyInvoice, payInvoice, rejectInvoice, startInvoiceReview } from "@/features/invoices/actions";
 import { invoiceTotals, listInvoices, type InvoiceQueueRow } from "@/features/invoices/queries";
-import { canMap, requirePage } from "@/lib/auth";
+import { canMap, requirePage, type AuthUser } from "@/lib/auth";
+import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
+import { hasOpenRequest } from "@/lib/approvals/engine";
+import ActionForm from "@/components/ActionForm";
 
 const STATUSES: InvoiceStatus[] = ["submitted", "under_review", "certified", "approved", "paid", "rejected"];
 
 function Hidden({ id }: { id: number }) { return <input type="hidden" name="id" value={id} />; }
 
 type Can = { certify: boolean; approve: boolean; pay: boolean };
-function Actions({ i, c }: { i: InvoiceQueueRow; c: Can }) {
+function Actions({ i, c, me }: { i: InvoiceQueueRow; c: Can; me: AuthUser }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5">
-      {c.certify && i.status === "submitted" && <form action={startInvoiceReview}><Hidden id={i.id} /><Button type="submit" size="sm">Start review</Button></form>}
+      {c.certify && i.status === "submitted" && <ActionForm action={startInvoiceReview}><Hidden id={i.id} /><Button type="submit" size="sm">Start review</Button></ActionForm>}
       {c.certify && (i.status === "submitted" || i.status === "under_review") && (
         <ModalButton label="Certify" title={`Certify invoice ${i.invoice_no ?? i.id}`} size="sm" variant="primary">
-          <form action={certifyInvoice} className="space-y-3">
+          <ActionForm action={certifyInvoice} className="space-y-3">
             <Hidden id={i.id} />
             <p className="text-sm text-slate-600">Claimed {formatMoney(i.claimed_amount)}. Retention {i.retention_pct}% and advance recovery {i.advance_pct}% are deducted automatically.</p>
             <Field label="Certified amount"><Input type="number" step="0.01" min="0" name="certified_amount" defaultValue={i.claimed_amount} required /></Field>
             <Button type="submit" variant="primary">Certify</Button>
-          </form>
+          </ActionForm>
         </ModalButton>
       )}
-      {c.approve && i.status === "certified" && <form action={approveInvoice}><Hidden id={i.id} /><Button type="submit" size="sm" variant="success">Approve</Button></form>}
-      {c.pay && i.status === "approved" && (
+      {c.approve && i.status === "certified" && !hasOpenRequest("sub_invoice", i.id) && <ActionForm action={approveInvoice}><Hidden id={i.id} /><Button type="submit" size="sm" variant="success">Request approval</Button></ActionForm>}
+      <ApprovalPanel compact label="Invoice approval" type="sub_invoice" documentId={i.id} path="/invoices" user={me} title={`Invoice approval ${i.invoice_no ?? i.id}`} />
+      <ApprovalPanel compact label="Payment approval" type="invoice_payment" documentId={i.id} path="/invoices" user={me} title={`Payment approval ${i.invoice_no ?? i.id}`} />
+      {c.pay && i.status === "approved" && !hasOpenRequest("invoice_payment", i.id) && (
         <ModalButton label="Mark paid" title={`Pay invoice ${i.invoice_no ?? i.id}`} size="sm" variant="success">
-          <form action={payInvoice} className="space-y-3">
+          <ActionForm action={payInvoice} className="space-y-3">
             <Hidden id={i.id} />
             <Field label="Paid amount"><Input type="number" step="0.01" min="0" name="paid_amount" defaultValue={i.net_payable} required /></Field>
             <Field label="Paid date"><Input type="date" name="paid_date" defaultValue={todayISO()} required /></Field>
             <Button type="submit" variant="success">Record payment</Button>
-          </form>
+          </ActionForm>
         </ModalButton>
       )}
       {(c.certify || c.approve) && i.status !== "paid" && i.status !== "rejected" && (
         <ModalButton label="Reject" title={`Reject invoice ${i.invoice_no ?? i.id}`} size="sm" variant="danger">
-          <form action={rejectInvoice} className="space-y-3">
+          <ActionForm action={rejectInvoice} className="space-y-3">
             <Hidden id={i.id} />
             <Field label="Reason"><Textarea name="reason" rows={3} /></Field>
             <Button type="submit" variant="danger">Reject invoice</Button>
-          </form>
+          </ActionForm>
         </ModalButton>
       )}
     </div>
@@ -99,7 +104,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                   <TD num>{i.advance_recovery ? formatMoney(i.advance_recovery) : "—"}</TD>
                   <TD num className="font-medium">{i.net_payable ? formatMoney(i.net_payable) : "—"}</TD>
                   <TD><StatusBadge kind="invoiceStatus" value={i.status} />{i.paid_date && <div className="text-xs text-slate-400">{formatDate(i.paid_date)}</div>}</TD>
-                  <TD><Actions i={i} c={c} /></TD>
+                  <TD><Actions i={i} c={c} me={me} /></TD>
                 </TR>
               ))}
             </TBody>

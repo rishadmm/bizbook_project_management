@@ -6,6 +6,8 @@ import { syncInvoiceCost } from "@/lib/metrics";
 import { todayISO } from "@/lib/format";
 import type { InvoiceStatus } from "@/lib/types";
 import { requireAnyPermission, requirePermission } from "@/lib/auth";
+import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
+import { guard, type ActionResult as FormResult } from "@/lib/action-result";
 
 interface InvRow {
   id: number; status: InvoiceStatus; project_id: number; claimed_amount: number; certified_amount: number; net_payable: number;
@@ -23,56 +25,76 @@ async function done(inv: InvRow, action: string, message: string) {
   syncInvoiceCost(inv.id);
   await logActivity("invoice", inv.id, action, message);
   revalidatePath("/invoices"); revalidatePath("/"); revalidatePath(`/projects/${inv.project_id}`);
-  revalidatePath(`/subcontractors/${inv.subcontractor_id}`);
+  revalidatePath(`/subcontractors/${inv.subcontractor_id}`); revalidatePath("/", "layout");
 }
 const label = (i: InvRow) => i.invoice_no ?? `#${i.id}`;
 
-export async function startInvoiceReview(form: FormData): Promise<void> {
-  await requirePermission("invoices", "certify");
-  const inv = load(form);
-  if (inv.status !== "submitted") throw new Error("Only submitted invoices can be put under review");
-  getDb().prepare("UPDATE sub_invoices SET status='under_review' WHERE id=?").run(inv.id);
-  await done(inv, "review", `Invoice ${label(inv)} under review`);
+export async function startInvoiceReview(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    await requirePermission("invoices", "certify");
+    const inv = load(form);
+    if (inv.status !== "submitted") throw new Error("Only submitted invoices can be put under review");
+    getDb().prepare("UPDATE sub_invoices SET status='under_review' WHERE id=?").run(inv.id);
+    await done(inv, "review", `Invoice ${label(inv)} under review`);
+  });
 }
 
-export async function certifyInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "certify");
-  const inv = load(form);
-  if (inv.status !== "submitted" && inv.status !== "under_review") throw new Error("Invoice cannot be certified in its current status");
-  const certified = Number(form.get("certified_amount"));
-  if (!Number.isFinite(certified) || certified < 0) throw new Error("Certified amount is invalid");
-  const retention = certified * (inv.retention_pct || 0) / 100;
-  const advance = certified * (inv.advance_pct || 0) / 100;
-  const net = certified - retention - advance;
-  getDb().prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=? WHERE id=?")
-    .run(certified, retention, advance, net, inv.id);
-  await done(inv, "certify", `Invoice ${label(inv)} certified at ${certified.toFixed(2)} (net payable ${net.toFixed(2)})`);
+export async function certifyInvoice(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    const user = await requirePermission("invoices", "certify");
+    const inv = load(form);
+    if (inv.status !== "submitted" && inv.status !== "under_review") throw new Error("Invoice cannot be certified in its current status");
+    const certified = Number(form.get("certified_amount"));
+    if (!Number.isFinite(certified) || certified < 0) throw new Error("Certified amount is invalid");
+    const retention = certified * (inv.retention_pct || 0) / 100;
+    const advance = certified * (inv.advance_pct || 0) / 100;
+    const net = certified - retention - advance;
+    getDb().transaction(() => {
+      withdrawOpenRequest("sub_invoice", inv.id, user.id);
+      getDb().prepare("UPDATE sub_invoices SET status='certified', certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=? WHERE id=?")
+        .run(certified, retention, advance, net, inv.id);
+      // Certification raises the multi-level sub_invoice approval (approved + cost posted on final approval).
+      submitForApproval("sub_invoice", inv.id, { userId: user.id });
+    })();
+    await done(inv, "certify", `Invoice ${label(inv)} certified at ${certified.toFixed(2)} (net payable ${net.toFixed(2)})`);
+  });
 }
 
-export async function approveInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "approve");
-  const inv = load(form);
-  if (inv.status !== "certified") throw new Error("Only certified invoices can be approved");
-  getDb().prepare("UPDATE sub_invoices SET status='approved' WHERE id=?").run(inv.id);
-  await done(inv, "approve", `Invoice ${label(inv)} approved`);
+export async function approveInvoice(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    const user = await requirePermission("invoices", "approve");
+    const inv = load(form);
+    if (inv.status !== "certified") throw new Error("Only certified invoices can be approved");
+    if (hasOpenRequest("sub_invoice", inv.id)) throw new Error("Invoice approval is already pending");
+    submitForApproval("sub_invoice", inv.id, { userId: user.id });
+    await done(inv, "approval", `Invoice ${label(inv)} submitted for approval`);
+  });
 }
 
-export async function payInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "pay");
-  const inv = load(form);
-  if (inv.status !== "approved") throw new Error("Only approved invoices can be paid");
-  const amount = form.get("paid_amount") ? Number(form.get("paid_amount")) : inv.net_payable;
-  if (!Number.isFinite(amount) || amount < 0) throw new Error("Paid amount is invalid");
-  const date = String(form.get("paid_date") ?? "").trim() || todayISO();
-  getDb().prepare("UPDATE sub_invoices SET status='paid', paid_amount=?, paid_date=? WHERE id=?").run(amount, date, inv.id);
-  await done(inv, "pay", `Invoice ${label(inv)} paid (${amount.toFixed(2)} on ${date})`);
+export async function payInvoice(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    const user = await requirePermission("invoices", "pay");
+    const inv = load(form);
+    if (inv.status !== "approved") throw new Error("Only approved invoices can be paid");
+    const amount = form.get("paid_amount") ? Number(form.get("paid_amount")) : inv.net_payable;
+    if (!Number.isFinite(amount) || amount < 0) throw new Error("Paid amount is invalid");
+    const date = String(form.get("paid_date") ?? "").trim() || todayISO();
+    if (hasOpenRequest("invoice_payment", inv.id)) throw new Error("Payment approval is already pending");
+    submitForApproval("invoice_payment", inv.id, { userId: user.id, payload: { paid_amount: amount, paid_date: date } });
+    await done(inv, "approval", `Payment of invoice ${label(inv)} (${amount.toFixed(2)} on ${date}) submitted for approval`);
+  });
 }
 
-export async function rejectInvoice(form: FormData): Promise<void> {
-  await requireAnyPermission("invoices", ["certify", "approve"]);
-  const inv = load(form);
-  if (inv.status === "paid" || inv.status === "rejected") throw new Error("Invoice cannot be rejected in its current status");
-  const reason = String(form.get("reason") ?? "").trim();
-  getDb().prepare("UPDATE sub_invoices SET status='rejected', notes = CASE WHEN ? <> '' THEN ? ELSE notes END WHERE id=?").run(reason, reason ? `Rejected: ${reason}` : "", inv.id);
-  await done(inv, "reject", `Invoice ${label(inv)} rejected${reason ? `: ${reason}` : ""}`);
+export async function rejectInvoice(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    const user = await requireAnyPermission("invoices", ["certify", "approve"]);
+    const inv = load(form);
+    if (inv.status === "paid" || inv.status === "rejected") throw new Error("Invoice cannot be rejected in its current status");
+    const reason = String(form.get("reason") ?? "").trim();
+    getDb().transaction(() => {
+      withdrawOpenRequest("sub_invoice", inv.id, user.id); withdrawOpenRequest("invoice_payment", inv.id, user.id);
+      getDb().prepare("UPDATE sub_invoices SET status='rejected', notes = CASE WHEN ? <> '' THEN ? ELSE notes END WHERE id=?").run(reason, reason ? `Rejected: ${reason}` : "", inv.id);
+    })();
+    await done(inv, "reject", `Invoice ${label(inv)} rejected${reason ? `: ${reason}` : ""}`);
+  });
 }

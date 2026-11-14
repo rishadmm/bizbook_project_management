@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Pencil } from "lucide-react";
+import { ExternalLink, Pencil } from "lucide-react";
 import Link from "next/link";
 import { ProjectMapLazy } from "@/components/map/ProjectMap";
 import type { MapFeature, MapLegendItem } from "@/components/map/types";
@@ -30,6 +30,7 @@ export default function ProjectMapPanel({ projectId, features, legend, editable,
         ) : (
           <Link href={`${base}&edit=1`} className={buttonClass("secondary", "sm")}><Pencil size={13} className="mr-1" />Edit map</Link>
         )}
+        <Link href={`/map?project=${projectId}`} className={buttonClass("secondary", "sm")}><ExternalLink size={13} className="mr-1" />Open in Live Ops Map</Link>
         {msg && <span className="text-xs font-medium text-emerald-700">{msg}</span>}
       </div>
       <ProjectMapLazy

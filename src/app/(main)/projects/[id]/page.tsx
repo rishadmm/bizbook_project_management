@@ -15,7 +15,7 @@ import { requirePage } from "@/lib/auth";
 type SP = { tab?: string; edit?: string; stage?: string; sub?: string; status?: string };
 
 export default async function ProjectPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<SP> }) {
-  await requirePage("projects");
+  const me = await requirePage("projects");
   const { id: idStr } = await params;
   const sp = await searchParams;
   const id = Number(idStr);
@@ -62,10 +62,10 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
       {tab === "map" && <MapTab project={project} stages={stages} edit={sp.edit === "1"} />}
       {tab === "stages" && <StagesTab project={project} stages={stages} />}
       {tab === "subprojects" && <SubProjectsTab project={project} />}
-      {tab === "subcontracts" && <SubcontractsTab project={project} stages={stages} />}
+      {tab === "subcontracts" && <SubcontractsTab project={project} stages={stages} me={me} />}
       {tab === "progress" && <ProgressTab project={project} stages={stages} filters={{ stageId: Number(sp.stage) || undefined, subcontractorId: Number(sp.sub) || undefined, status: sp.status || undefined }} />}
-      {tab === "budget" && <BudgetTab project={project} stages={stages} />}
-      {tab === "invoices" && <InvoicesTab project={project} />}
+      {tab === "budget" && <BudgetTab project={project} stages={stages} me={me} />}
+      {tab === "invoices" && <InvoicesTab project={project} me={me} />}
       {tab === "delays" && <DelaysTab project={project} stages={stages} />}
       {tab === "documents" && <AttachmentsPanel entityType="project" entityId={id} revalidate={base} />}
       {tab === "activity" && <ActivityTimeline entityType="project" entityId={id} />}

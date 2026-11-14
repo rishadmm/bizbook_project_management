@@ -2,13 +2,15 @@ import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { statusOptions } from "@/lib/status";
 import type { Client, Tender, User } from "@/lib/types";
+import ActionForm from "@/components/ActionForm";
+import type { ActionResult } from "@/lib/action-result";
 
 /** Shared new/edit tender form (server component). */
 export function TenderForm({ action, tender, clients, users, defaultOwner, submitLabel }: {
-  action: (form: FormData) => Promise<void>; tender?: Tender; clients: Client[]; users: User[]; defaultOwner?: number; submitLabel: string;
+  action: (form: FormData) => Promise<ActionResult | void>; tender?: Tender; clients: Client[]; users: User[]; defaultOwner?: number; submitLabel: string;
 }) {
   return (
-    <form action={action} className="space-y-4">
+    <ActionForm action={action} className="space-y-4">
       {tender && <input type="hidden" name="id" value={tender.id} />}
       <Field label="Title"><Input name="title" required defaultValue={tender?.title} placeholder="e.g. Widening of E311 - Section 2" /></Field>
       <div className="grid gap-3 sm:grid-cols-4">
@@ -34,6 +36,6 @@ export function TenderForm({ action, tender, clients, users, defaultOwner, submi
         <Field label="Owner"><Select name="owner_id" defaultValue={tender?.owner_id ?? defaultOwner ?? ""} placeholder="-" options={users.map((u) => ({ value: u.id, label: u.name }))} /></Field>
       </div>
       <div className="flex justify-end"><Button type="submit" variant="primary">{submitLabel}</Button></div>
-    </form>
+    </ActionForm>
   );
 }

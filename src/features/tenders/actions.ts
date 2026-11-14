@@ -5,11 +5,14 @@ import { getDb } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { getCurrentUser } from "@/lib/session";
 import { refreshRevisionTotals } from "@/lib/metrics";
-import { DEFAULT_TENDER_SECTIONS, REVIEW_DEPARTMENTS, ENUMS } from "@/lib/status";
+import { DEFAULT_TENDER_SECTIONS, ENUMS } from "@/lib/status";
 import { todayISO } from "@/lib/format";
 import type { BudgetCategory, BudgetLine, Tender, TenderRevision, TenderStatus } from "@/lib/types";
 import { canMove, TERMINAL } from "./workflow";
+import { nextCode } from "./conversion";
+import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
 import { isAdminUser, requirePermission } from "@/lib/auth";
+import { guard, type ActionResult as FormResult } from "@/lib/action-result";
 
 const str = (f: FormData, k: string): string => String(f.get(k) ?? "").trim();
 const strOrNull = (f: FormData, k: string): string | null => str(f, k) || null;
@@ -28,14 +31,6 @@ function currentRevision(t: Tender): TenderRevision {
   if (!r) throw new Error("Tender has no current revision");
   return r;
 }
-function nextCode(table: "tenders" | "projects", prefix: string): string {
-  const year = new Date().getFullYear();
-  const like = `${prefix}-${year}-%`;
-  const rows = getDb().prepare(`SELECT code FROM ${table} WHERE code LIKE ?`).all(like) as { code: string }[];
-  const max = rows.reduce((m, r) => Math.max(m, Number(r.code.split("-")[2]) || 0), 0);
-  return `${prefix}-${year}-${String(max + 1).padStart(3, "0")}`;
-}
-
 /* ------------------------------------------------------------------ tender CRUD */
 
 function tenderFields(f: FormData) {
@@ -52,42 +47,46 @@ function tenderFields(f: FormData) {
   };
 }
 
-export async function createTender(form: FormData): Promise<void> {
-  await requirePermission("tenders", "create");
-  const v = tenderFields(form);
-  const user = await getCurrentUser();
-  const db = getDb();
-  const id = db.transaction(() => {
-    const code = nextCode("tenders", "TND");
-    const info = db.prepare(`INSERT INTO tenders(code, title, client_id, kind, category, location, scope_summary, technical_spec, quantity, quantity_unit,
-      issue_date, clarification_deadline, submission_deadline, bid_bond_amount, estimated_value, status, owner_id, probability_pct)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`).run(code, v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec,
-      v.quantity, v.quantity_unit, v.issue_date, v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id ?? (user.id || null), v.probability_pct);
-    const tid = Number(info.lastInsertRowid);
-    const rev = db.prepare("INSERT INTO tender_revisions(tender_id, rev_no, label, reason, status, created_by) VALUES (?,0,'R0','Initial estimate','draft',?)").run(tid, user.id || null);
-    db.prepare("UPDATE tenders SET current_revision_id = ? WHERE id = ?").run(Number(rev.lastInsertRowid), tid);
-    for (const [dept, title] of DEFAULT_TENDER_SECTIONS) {
-      const d = db.prepare("SELECT id FROM departments WHERE name = ?").get(dept) as { id: number } | undefined;
-      db.prepare("INSERT INTO tender_sections(tender_id, department_id, title, status) VALUES (?,?,?, 'not_started')").run(tid, d?.id ?? null, title);
-    }
-    return tid;
-  })();
-  await logActivity("tender", id, "created", `Tender created with revision R0 and ${DEFAULT_TENDER_SECTIONS.length} department sections`);
-  revalidatePath("/tenders");
-  redirect(path(id));
+export async function createTender(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    await requirePermission("tenders", "create");
+    const v = tenderFields(form);
+    const user = await getCurrentUser();
+    const db = getDb();
+    const id = db.transaction(() => {
+      const code = nextCode("tenders", "TND");
+      const info = db.prepare(`INSERT INTO tenders(code, title, client_id, kind, category, location, scope_summary, technical_spec, quantity, quantity_unit,
+        issue_date, clarification_deadline, submission_deadline, bid_bond_amount, estimated_value, status, owner_id, probability_pct)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`).run(code, v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec,
+        v.quantity, v.quantity_unit, v.issue_date, v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id ?? (user.id || null), v.probability_pct);
+      const tid = Number(info.lastInsertRowid);
+      const rev = db.prepare("INSERT INTO tender_revisions(tender_id, rev_no, label, reason, status, created_by) VALUES (?,0,'R0','Initial estimate','draft',?)").run(tid, user.id || null);
+      db.prepare("UPDATE tenders SET current_revision_id = ? WHERE id = ?").run(Number(rev.lastInsertRowid), tid);
+      for (const [dept, title] of DEFAULT_TENDER_SECTIONS) {
+        const d = db.prepare("SELECT id FROM departments WHERE name = ?").get(dept) as { id: number } | undefined;
+        db.prepare("INSERT INTO tender_sections(tender_id, department_id, title, status) VALUES (?,?,?, 'not_started')").run(tid, d?.id ?? null, title);
+      }
+      return tid;
+    })();
+    await logActivity("tender", id, "created", `Tender created with revision R0 and ${DEFAULT_TENDER_SECTIONS.length} department sections`);
+    revalidatePath("/tenders");
+    redirect(path(id));
+  });
 }
 
-export async function updateTender(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
-  const id = Number(form.get("id"));
-  tenderOr404(id);
-  const v = tenderFields(form);
-  getDb().prepare(`UPDATE tenders SET title=?, client_id=?, kind=?, category=?, location=?, scope_summary=?, technical_spec=?, quantity=?, quantity_unit=?,
-    issue_date=?, clarification_deadline=?, submission_deadline=?, bid_bond_amount=?, estimated_value=?, owner_id=?, probability_pct=? WHERE id=?`)
-    .run(v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec, v.quantity, v.quantity_unit, v.issue_date,
-      v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id, v.probability_pct, id);
-  await logActivity("tender", id, "updated", "Tender details updated");
-  revalidatePath(path(id)); revalidatePath("/tenders");
+export async function updateTender(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    await requirePermission("tenders", "edit");
+    const id = Number(form.get("id"));
+    tenderOr404(id);
+    const v = tenderFields(form);
+    getDb().prepare(`UPDATE tenders SET title=?, client_id=?, kind=?, category=?, location=?, scope_summary=?, technical_spec=?, quantity=?, quantity_unit=?,
+      issue_date=?, clarification_deadline=?, submission_deadline=?, bid_bond_amount=?, estimated_value=?, owner_id=?, probability_pct=? WHERE id=?`)
+      .run(v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec, v.quantity, v.quantity_unit, v.issue_date,
+        v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id, v.probability_pct, id);
+    await logActivity("tender", id, "updated", "Tender details updated");
+    revalidatePath(path(id)); revalidatePath("/tenders");
+  });
 }
 
 export async function deleteTender(form: FormData): Promise<void> {
@@ -114,6 +113,7 @@ export async function transitionTender(form: FormData): Promise<void> {
   await requirePermission("tenders", to === "submitted" || to === "under_review" ? "submit" : "edit");
   const t = tenderOr404(id);
   if (to === "won" || to === "lost") throw new Error("Use the Mark Won / Mark Lost dialogs");
+  if (to === "approved") throw new Error("Tender approval is decided by the approval workflow");
   if (!canMove(t.status, to)) throw new Error(`Cannot move from ${t.status} to ${to}`);
   const user = await getCurrentUser();
   const db = getDb();
@@ -122,25 +122,23 @@ export async function transitionTender(form: FormData): Promise<void> {
     if (to === "under_review") {
       const open = db.prepare("SELECT COUNT(*) c FROM tender_sections WHERE tender_id = ? AND status != 'completed'").get(id) as { c: number };
       if (open.c > 0 && !(override && isAdminUser(user))) throw new Error(`${open.c} department section(s) not completed (admin may override)`);
-      db.prepare("DELETE FROM tender_reviews WHERE revision_id = ?").run(rev.id);
-      for (const name of REVIEW_DEPARTMENTS) {
-        const d = db.prepare("SELECT id FROM departments WHERE name = ?").get(name) as { id: number } | undefined;
-        db.prepare("INSERT INTO tender_reviews(tender_id, revision_id, department_id, decision) VALUES (?,?,?, 'pending')").run(id, rev.id, d?.id ?? null);
-      }
     }
+    if (t.status === "under_review") withdrawOpenRequest("tender_submission", id, user.id);
     if (to === "submitted") {
       db.prepare("UPDATE tenders SET submitted_at = ? WHERE id = ?").run(todayISO(), id);
       db.prepare("UPDATE tender_revisions SET status = 'submitted', submitted_at = ? WHERE id = ?").run(todayISO(), rev.id);
     }
     if (to === "cancelled" || to === "no_bid") db.prepare("UPDATE tenders SET decided_at = ? WHERE id = ?").run(todayISO(), id);
     db.prepare("UPDATE tenders SET status = ? WHERE id = ?").run(to, id);
+    // Send for review = multi-level approval workflow (auto-approves, as before, when no workflow applies).
+    if (to === "under_review") submitForApproval("tender_submission", id, { userId: user.id });
   })();
   await logActivity("tender", id, "status", `Status changed ${t.status} -> ${to}`);
-  revalidatePath(path(id)); revalidatePath("/tenders");
+  revalidatePath(path(id)); revalidatePath("/tenders"); revalidatePath("/", "layout");
 }
 
 export async function markWon(form: FormData): Promise<void> {
-  await requirePermission("tenders", "approve");
+  const user = await requirePermission("tenders", "approve");
   const id = Number(form.get("id"));
   const t = tenderOr404(id);
   if (!canMove(t.status, "won")) throw new Error("Only submitted or negotiation tenders can be marked won");
@@ -150,42 +148,15 @@ export async function markWon(form: FormData): Promise<void> {
   const awardDate = str(form, "award_date") || todayISO();
   const start = strOrNull(form, "start_date"); const end = strOrNull(form, "end_date");
   const managerId = intOrNull(form, "manager_id");
-  const rev = currentRevision(t);
-  const db = getDb();
-  const projectId = db.transaction(() => {
-    const lines = db.prepare("SELECT * FROM budget_lines WHERE revision_id = ? ORDER BY sort, id").all(rev.id) as BudgetLine[];
-    const stageNames: string[] = [];
-    for (const l of lines) {
-      const n = (l.wbs_stage ?? "").trim();
-      if (n && n.toLowerCase() !== "general" && !stageNames.includes(n)) stageNames.push(n);
-    }
-    const cost = (l: BudgetLine) => l.quantity * l.unit_cost;
-    const totalCost = lines.reduce((s, l) => s + cost(l), 0);
-    const code = nextCode("projects", "PRJ");
-    const p = db.prepare(`INSERT INTO projects(code, name, tender_id, client_id, category, location, contract_value, budget_cost, start_date, end_date, status,
-      manager_id, total_quantity, quantity_unit, description) VALUES (?,?,?,?,?,?,?,?,?,?, 'planning', ?,?,?,?)`)
-      .run(code, t.title, t.id, t.client_id, t.category, t.location, wonValue, totalCost, start, end, managerId, t.quantity, t.quantity_unit, t.scope_summary);
-    const pid = Number(p.lastInsertRowid);
-    const stageIds = new Map<string, number>();
-    stageNames.forEach((name, i) => {
-      const budget = lines.filter((l) => (l.wbs_stage ?? "").trim() === name).reduce((s, l) => s + cost(l), 0);
-      const s = db.prepare(`INSERT INTO stages(project_id, code, name, sort, planned_quantity, quantity_unit, planned_start, planned_end, budget_amount, status)
-        VALUES (?,?,?,?,0,?,?,?,?, 'not_started')`).run(pid, `S${i + 1}`, name, i + 1, t.quantity_unit, start, end, budget);
-      stageIds.set(name, Number(s.lastInsertRowid));
-    });
-    for (const l of lines) {
-      const n = (l.wbs_stage ?? "").trim();
-      db.prepare(`INSERT INTO project_budget_lines(project_id, stage_id, category, description, unit, quantity, unit_cost, budget_amount, source_budget_line_id)
-        VALUES (?,?,?,?,?,?,?,?,?)`).run(pid, stageIds.get(n) ?? null, l.category, l.description, l.unit, l.quantity, l.unit_cost, cost(l), l.id);
-    }
-    db.prepare("UPDATE tender_revisions SET status = 'final' WHERE id = ?").run(rev.id);
-    db.prepare("UPDATE tenders SET status='won', won_value=?, project_id=?, decided_at=? WHERE id=?").run(wonValue, pid, awardDate, id);
-    return pid;
-  })();
-  await logActivity("tender", id, "won", `Tender won at final value ${wonValue}; project created`);
-  await logActivity("project", projectId, "created", `Project created from tender ${t.code}`);
-  revalidatePath(path(id)); revalidatePath("/tenders"); revalidatePath("/projects"); revalidatePath("/");
-  redirect(`/projects/${projectId}`);
+  currentRevision(t);
+  // The award goes through the tender_award approval workflow; the project is created by its final approval.
+  const res = submitForApproval("tender_award", id, { userId: user.id, payload: { won_value: wonValue, award_date: awardDate, start_date: start, end_date: end, manager_id: managerId } });
+  revalidatePath(path(id)); revalidatePath("/tenders"); revalidatePath("/projects"); revalidatePath("/"); revalidatePath("/", "layout");
+  if (res.status === "auto_approved") {
+    const projectId = tenderOr404(id).project_id;
+    if (projectId) redirect(`/projects/${projectId}`);
+  }
+  redirect(`${path(id)}?tab=approvals`);
 }
 
 export async function markLost(form: FormData): Promise<void> {
@@ -193,6 +164,7 @@ export async function markLost(form: FormData): Promise<void> {
   const id = Number(form.get("id"));
   const t = tenderOr404(id);
   if (!canMove(t.status, "lost")) throw new Error("Only submitted or negotiation tenders can be marked lost");
+  if (hasOpenRequest("tender_award", id)) throw new Error("An award approval is pending for this tender; cancel it first");
   const reason = str(form, "primary_reason") || "other";
   if (!(reason in ENUMS.lossReason)) throw new Error("Invalid reason");
   const winnerPrice = numOrNull(form, "winner_price");
@@ -268,6 +240,7 @@ function editableRevision(revisionId: number): { rev: TenderRevision; tender: Te
   if (rev.status !== "draft") throw new Error(`Revision ${rev.label ?? rev.rev_no} is ${rev.status} and read-only`);
   const tender = tenderOr404(rev.tender_id);
   if (TERMINAL.includes(tender.status)) throw new Error("Tender is closed");
+  if (hasOpenRequest("tender_revision", rev.id) || (tender.status === "under_review" && hasOpenRequest("tender_submission", tender.id))) throw new Error("The budget is locked while an approval is pending");
   return { rev, tender };
 }
 const fail = (e: unknown): { ok: false; error: string } => {
@@ -416,19 +389,14 @@ export async function createRevision(form: FormData): Promise<void> {
 }
 
 export async function submitRevision(form: FormData): Promise<void> {
-  await requirePermission("tenders", "submit");
+  const user = await requirePermission("tenders", "submit");
   const tid = Number(form.get("tender_id"));
   const t = tenderOr404(tid);
   const cur = currentRevision(t);
   if (cur.status !== "draft" || cur.rev_no === 0) throw new Error("Only a draft revision R1+ can be submitted here");
-  const db = getDb();
-  db.transaction(() => {
-    db.prepare("UPDATE tender_revisions SET status='superseded' WHERE tender_id = ? AND status = 'submitted' AND id != ?").run(tid, cur.id);
-    db.prepare("UPDATE tender_revisions SET status='submitted', submitted_at=? WHERE id = ?").run(todayISO(), cur.id);
-    if (t.status === "submitted") db.prepare("UPDATE tenders SET status='negotiation' WHERE id = ?").run(tid);
-  })();
-  await logActivity("tender", tid, "revision", `Revision ${cur.label} submitted to client`);
-  revalidatePath(path(tid)); revalidatePath("/tenders");
+  // Price revisions are released to the client through the tender_revision approval workflow.
+  submitForApproval("tender_revision", cur.id, { userId: user.id });
+  revalidatePath(path(tid)); revalidatePath("/tenders"); revalidatePath("/", "layout");
 }
 
 export async function saveRevisionFeedback(form: FormData): Promise<void> {
@@ -461,31 +429,4 @@ export async function deleteNegotiation(form: FormData): Promise<void> {
   getDb().prepare("DELETE FROM negotiations WHERE id = ? AND tender_id = ?").run(id, tid);
   await logActivity("tender", tid, "negotiation", "Negotiation entry deleted");
   revalidatePath(path(tid));
-}
-
-/* ------------------------------------------------------------------ reviews */
-
-export async function decideReview(form: FormData): Promise<void> {
-  await requirePermission("tenders", "approve");
-  const id = Number(form.get("id")); const decision = str(form, "decision");
-  if (!["approved", "changes_requested", "rejected"].includes(decision)) throw new Error("Invalid decision");
-  const db = getDb();
-  const rv = db.prepare("SELECT * FROM tender_reviews WHERE id = ?").get(id) as { id: number; tender_id: number; revision_id: number | null; department_id: number | null } | undefined;
-  if (!rv) throw new Error("Review not found");
-  const user = await getCurrentUser();
-  if (!isAdminUser(user) && user.department_id !== rv.department_id) throw new Error("You can only decide your own department's review");
-  const comment = strOrNull(form, "comment");
-  if (decision !== "approved" && !comment) throw new Error("A comment is required when requesting changes or rejecting");
-  const t = tenderOr404(rv.tender_id);
-  if (t.status !== "under_review") throw new Error("Tender is not under review");
-  let newStatus: TenderStatus = t.status;
-  db.transaction(() => {
-    db.prepare("UPDATE tender_reviews SET decision=?, comment=?, reviewer_id=?, decided_at=? WHERE id=?").run(decision, comment, user.id || null, todayISO(), id);
-    const all = db.prepare("SELECT decision FROM tender_reviews WHERE tender_id = ? AND revision_id IS ?").all(rv.tender_id, rv.revision_id) as { decision: string }[];
-    if (all.some((r) => r.decision === "changes_requested" || r.decision === "rejected")) newStatus = "in_preparation";
-    else if (all.every((r) => r.decision === "approved")) newStatus = "approved";
-    if (newStatus !== t.status) db.prepare("UPDATE tenders SET status = ? WHERE id = ?").run(newStatus, rv.tender_id);
-  })();
-  await logActivity("tender", rv.tender_id, "review", `Review ${decision.replace("_", " ")}${newStatus !== t.status ? ` - tender now ${newStatus}` : ""}`);
-  revalidatePath(path(rv.tender_id)); revalidatePath("/tenders"); revalidatePath("/");
 }

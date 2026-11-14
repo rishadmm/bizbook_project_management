@@ -13,7 +13,7 @@ export function ActivityTimeline({ entityType, entityId, limit = 100, title = "A
         <ol className="relative ml-2 border-l border-slate-200">
           {rows.map((r) => (
             <li key={r.id} className="mb-4 ml-4">
-              <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-white bg-blue-500" />
+              <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border-2 border-white bg-primary" />
               <div className="text-sm text-slate-800">{r.message ?? r.action}</div>
               <div className="text-xs text-slate-500">{r.user_name ?? "System"} · {formatDateTime(r.created_at)} · <span className="uppercase tracking-wide">{r.action}</span></div>
             </li>

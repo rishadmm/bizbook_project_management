@@ -23,7 +23,7 @@ export function RoleMatrixEditor({ roleId, initial, readOnly, isSuperAdmin, name
 }) {
   const [sel, setSel] = useState<Set<string>>(() => new Set(initial));
   const locked = readOnly || !canEdit;
-  const toggle = (keys: string[], on: boolean) => setSel((p) => { const n = new Set(p); for (const k of keys) on ? n.add(k) : n.delete(k); return n; });
+  const toggle = (keys: string[], on: boolean) => setSel((p) => { const n = new Set(p); for (const k of keys) { if (on) n.add(k); else n.delete(k); } return n; });
   const preview = useMemo(() => navFor(toPerms(sel), !!isSuperAdmin), [sel, isSuperAdmin]);
   return (
     <form action={saveRoleAction} className="grid gap-5 lg:grid-cols-[1fr_260px]">

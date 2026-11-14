@@ -10,11 +10,11 @@ export default async function ForbiddenPage({ searchParams }: { searchParams: Pr
   const { module } = await searchParams;
   const label = module && isModule(module) ? MODULES[module].label : "this page";
   return (
-    <div className="mx-auto mt-16 max-w-md text-center">
-      <ShieldAlert className="mx-auto text-amber-500" size={44} />
-      <h1 className="mt-3 text-xl font-semibold text-slate-900">Access denied</h1>
+    <div className="mx-auto mt-16 max-w-md rounded-2xl border border-line bg-white p-8 text-center shadow-card">
+      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-500"><ShieldAlert size={30} /></span>
+      <h1 className="mt-4 text-2xl font-extrabold tracking-tight text-dark">Access denied</h1>
       <p className="mt-2 text-sm text-slate-600">You don&apos;t have access to {label}. Contact your administrator.</p>
-      <div className="mt-5 flex justify-center gap-2"><LinkButton href="/" variant="primary">Go to dashboard</LinkButton><Link href="/account" className="px-3 py-2 text-sm text-blue-700 hover:underline">My account</Link></div>
+      <div className="mt-6 flex items-center justify-center gap-3"><LinkButton href="/" variant="primary">Go to dashboard</LinkButton><Link href="/account" className="px-3 py-2 text-sm font-bold text-primary hover:underline">My account</Link></div>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { saveUpload } from "@/lib/files";
 import { getCurrentUser } from "@/lib/session";
 import { DEFAULT_ONBOARDING_ITEMS, ENUMS } from "@/lib/status";
 import { requirePermission } from "@/lib/auth";
+import { hasOpenRequest, submitForApproval } from "@/lib/approvals/engine";
+import { guard, type ActionResult as FormResult } from "@/lib/action-result";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const opt = (f: FormData, k: string) => str(f, k) || null;
@@ -27,45 +29,59 @@ function profileFields(form: FormData) {
   };
 }
 
-export async function createSubcontractor(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "create");
-  const f = profileFields(form);
-  const db = getDb();
-  const id = db.transaction(() => {
-    const max = (db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(code, 5) AS INTEGER)),0) m FROM subcontractors WHERE code LIKE 'SUB-%'").get() as { m: number }).m;
-    const code = `SUB-${String(max + 1).padStart(3, "0")}`;
-    const r = db.prepare(`INSERT INTO subcontractors(code, name, trade, categories, contact_person, email, phone, address, trade_license_no, trade_license_expiry, tax_no, bank_name, iban, status, rating, notes)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, f.name, f.trade, f.categories, f.contact_person, f.email, f.phone, f.address,
-      f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, "onboarding", f.rating, f.notes);
-    const sid = Number(r.lastInsertRowid);
-    const ins = db.prepare("INSERT INTO onboarding_checklist(subcontractor_id, item, done) VALUES (?,?,0)");
-    for (const item of DEFAULT_ONBOARDING_ITEMS) ins.run(sid, item);
-    return sid;
-  })();
-  await logActivity("subcontractor", id, "created", `Subcontractor ${f.name} created (onboarding started)`);
-  revalidatePath("/subcontractors");
-  redirect(`/subcontractors/${id}?tab=onboarding`);
+export async function createSubcontractor(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    await requirePermission("subcontractors", "create");
+    const f = profileFields(form);
+    const db = getDb();
+    const id = db.transaction(() => {
+      const max = (db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(code, 5) AS INTEGER)),0) m FROM subcontractors WHERE code LIKE 'SUB-%'").get() as { m: number }).m;
+      const code = `SUB-${String(max + 1).padStart(3, "0")}`;
+      const r = db.prepare(`INSERT INTO subcontractors(code, name, trade, categories, contact_person, email, phone, address, trade_license_no, trade_license_expiry, tax_no, bank_name, iban, status, rating, notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, f.name, f.trade, f.categories, f.contact_person, f.email, f.phone, f.address,
+        f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, "onboarding", f.rating, f.notes);
+      const sid = Number(r.lastInsertRowid);
+      const ins = db.prepare("INSERT INTO onboarding_checklist(subcontractor_id, item, done) VALUES (?,?,0)");
+      for (const item of DEFAULT_ONBOARDING_ITEMS) ins.run(sid, item);
+      return sid;
+    })();
+    await logActivity("subcontractor", id, "created", `Subcontractor ${f.name} created (onboarding started)`);
+    revalidatePath("/subcontractors");
+    redirect(`/subcontractors/${id}?tab=onboarding`);
+  });
 }
 
-export async function updateSubcontractor(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
-  const id = Number(form.get("id"));
-  if (!id) throw new Error("Missing id");
-  const f = profileFields(form);
-  getDb().prepare(`UPDATE subcontractors SET name=?, trade=?, categories=?, contact_person=?, email=?, phone=?, address=?, trade_license_no=?,
-    trade_license_expiry=?, tax_no=?, bank_name=?, iban=?, rating=?, notes=? WHERE id=?`).run(f.name, f.trade, f.categories, f.contact_person, f.email,
-    f.phone, f.address, f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, f.rating, f.notes, id);
-  await logActivity("subcontractor", id, "updated", "Profile updated");
-  revalidatePath(`/subcontractors/${id}`); revalidatePath("/subcontractors");
+export async function updateSubcontractor(form: FormData): Promise<FormResult> {
+  return guard(async () => {
+    await requirePermission("subcontractors", "edit");
+    const id = Number(form.get("id"));
+    if (!id) throw new Error("Missing id");
+    const f = profileFields(form);
+    getDb().prepare(`UPDATE subcontractors SET name=?, trade=?, categories=?, contact_person=?, email=?, phone=?, address=?, trade_license_no=?,
+      trade_license_expiry=?, tax_no=?, bank_name=?, iban=?, rating=?, notes=? WHERE id=?`).run(f.name, f.trade, f.categories, f.contact_person, f.email,
+      f.phone, f.address, f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, f.rating, f.notes, id);
+    await logActivity("subcontractor", id, "updated", "Profile updated");
+    revalidatePath(`/subcontractors/${id}`); revalidatePath("/subcontractors");
+  });
 }
 
 export async function setSubcontractorStatus(form: FormData): Promise<void> {
   const id = Number(form.get("id")); const status = str(form, "status");
   if (!id || !SUB_STATUSES.includes(status)) throw new Error("Invalid status");
-  await requirePermission("subcontractors", status === "approved" ? "approve" : "edit");
+  const user = await requirePermission("subcontractors", status === "approved" ? "approve" : "edit");
+  const cur = (getDb().prepare("SELECT status FROM subcontractors WHERE id = ?").get(id) as { status: string } | undefined)?.status;
+  if (!cur) throw new Error("Subcontractor not found");
   if (status === "approved") {
     const open = (getDb().prepare("SELECT COUNT(*) c FROM onboarding_checklist WHERE subcontractor_id = ? AND done = 0").get(id) as { c: number }).c;
     if (open > 0) throw new Error("Complete the onboarding checklist first");
+    if (cur === "onboarding" || cur === "prospect") {
+      // First-time approval goes through the subcontractor_onboarding workflow (reinstating a suspended subcontractor stays direct).
+      if (hasOpenRequest("subcontractor_onboarding", id)) throw new Error("Onboarding approval is already pending");
+      submitForApproval("subcontractor_onboarding", id, { userId: user.id });
+      await logActivity("subcontractor", id, "approval", "Onboarding submitted for approval");
+      revalidatePath(`/subcontractors/${id}`); revalidatePath("/subcontractors"); revalidatePath("/"); revalidatePath("/", "layout");
+      return;
+    }
   }
   getDb().prepare("UPDATE subcontractors SET status = ? WHERE id = ?").run(status, id);
   await logActivity("subcontractor", id, "status", `Status set to ${status}`);

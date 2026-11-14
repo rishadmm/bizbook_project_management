@@ -15,7 +15,7 @@ import type { MapFeature, ProjectMapProps } from "./types";
 L.Icon.Default.mergeOptions({ iconUrl: iconUrl.src, iconRetinaUrl: iconRetinaUrl.src, shadowUrl: shadowUrl.src });
 
 const DEFAULT_CENTER: [number, number] = [25.1, 55.3];
-const GREEN = "#16a34a";
+const GREEN = "#22c55e";
 type LL = [number, number];
 const flip = (c: number[]): LL => [c[1], c[0]];
 
@@ -35,7 +35,7 @@ function FeaturePopup({ f }: { f: MapFeature }) {
           </div>
         )}
         {f.popupHtml && <div className="text-xs text-slate-700" dangerouslySetInnerHTML={{ __html: f.popupHtml }} />}
-        {f.href && <a href={f.href} className="mt-1 inline-block text-xs font-medium text-blue-600">Open →</a>}
+        {f.href && <a href={f.href} className="mt-1 inline-block text-xs font-medium text-primary">Open →</a>}
       </div>
     </Popup>
   );
@@ -43,7 +43,7 @@ function FeaturePopup({ f }: { f: MapFeature }) {
 
 function renderLine(coords: number[][], f: MapFeature, key: string) {
   const positions = coords.map(flip);
-  const base = f.color ?? "#2563eb";
+  const base = f.color ?? "#635bff";
   const hasProgress = typeof f.progressPct === "number";
   let slice: LL[] | null = null;
   if (hasProgress && f.progressPct! > 0 && coords.length > 1) {
@@ -56,7 +56,7 @@ function renderLine(coords: number[][], f: MapFeature, key: string) {
   }
   return (
     <Fragment key={key}>
-      <Polyline positions={positions} pathOptions={{ color: hasProgress ? "#94a3b8" : base, weight: hasProgress ? 6 : 5, opacity: hasProgress ? 0.9 : 0.85 }}>
+      <Polyline positions={positions} pathOptions={{ color: hasProgress ? "#cbd5e1" : base, weight: hasProgress ? 6 : 5, opacity: hasProgress ? 0.9 : 0.85 }}>
         <FeaturePopup f={f} />
       </Polyline>
       {slice && <Polyline positions={slice} pathOptions={{ color: GREEN, weight: 6, opacity: 0.95 }} interactive={false} />}
@@ -71,9 +71,9 @@ function renderStatic(f: MapFeature) {
     case "LineString": return renderLine(g.coordinates, f, k);
     case "MultiLineString": return <Fragment key={k}>{g.coordinates.map((c, i) => renderLine(c, f, `${k}-${i}`))}</Fragment>;
     case "Polygon":
-      return <Polygon key={k} positions={g.coordinates.map((r) => r.map(flip))} pathOptions={{ color: f.color ?? "#2563eb", weight: 2, fillOpacity: 0.2 }}><FeaturePopup f={f} /></Polygon>;
+      return <Polygon key={k} positions={g.coordinates.map((r) => r.map(flip))} pathOptions={{ color: f.color ?? "#635bff", weight: 2, fillOpacity: 0.2 }}><FeaturePopup f={f} /></Polygon>;
     case "MultiPolygon":
-      return <Fragment key={k}>{g.coordinates.map((p, i) => <Polygon key={i} positions={p.map((r) => r.map(flip))} pathOptions={{ color: f.color ?? "#2563eb", weight: 2, fillOpacity: 0.2 }}><FeaturePopup f={f} /></Polygon>)}</Fragment>;
+      return <Fragment key={k}>{g.coordinates.map((p, i) => <Polygon key={i} positions={p.map((r) => r.map(flip))} pathOptions={{ color: f.color ?? "#635bff", weight: 2, fillOpacity: 0.2 }}><FeaturePopup f={f} /></Polygon>)}</Fragment>;
     case "Point":
       return <Marker key={k} position={flip(g.coordinates)}><FeaturePopup f={f} /></Marker>;
     default: return null;
@@ -130,7 +130,7 @@ function EditController({ features, drawKind, onDirty, onMeasure, registerCollec
     };
     for (const f of features.filter((x) => isEditable(x, true))) {
       const gl = L.geoJSON({ type: "Feature", properties: { id: f.id, kind: f.kind, label: f.label }, geometry: f.geometry } as GeoJSON.Feature, {
-        style: { color: f.color ?? "#2563eb", weight: 5 },
+        style: { color: f.color ?? "#635bff", weight: 5 },
       });
       gl.eachLayer((l) => { (l as L.Layer & { feature?: GeoJSON.Feature }).feature = { type: "Feature", properties: { id: f.id, kind: f.kind, label: f.label }, geometry: f.geometry }; fg.addLayer(l); attach(l); });
     }
@@ -211,7 +211,7 @@ export default function ProjectMapInner({ features, editable = false, onSave, dr
           {measures.length === 0 ? <div className="text-slate-500">Draw a line or area to measure.</div> : measures.map((m, i) => <div key={i} className="tabular-nums text-slate-700">{m.name}: {m.text}</div>)}
           {onSave && (
             <button type="button" onClick={save} disabled={!dirty || saving}
-              className="mt-2 w-full rounded bg-blue-600 px-3 py-1.5 font-medium text-white disabled:opacity-50">{saving ? "Saving…" : dirty ? "Save geometry" : "No changes"}</button>
+              className="mt-2 w-full rounded bg-primary px-3 py-1.5 font-medium text-white disabled:opacity-50">{saving ? "Saving…" : dirty ? "Save geometry" : "No changes"}</button>
           )}
         </div>
       )}
