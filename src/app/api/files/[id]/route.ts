@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { getPortalSession, portalOwnsAttachment } from "@/lib/portal-auth";
+import { clientOwnsAttachment, getClientSession } from "@/lib/client-portal-auth";
 import { resolvePortal } from "@/features/portal/queries";
 import { UPLOAD_DIR } from "@/lib/files";
 import type { Attachment } from "@/lib/types";
@@ -37,10 +38,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!authorised) {
     // Separate portal login (bbp_portal): only files that belong to the signed-in company.
     const ps = await getPortalSession();
-    if (ps) {
-      if (!portalOwnsAttachment(ps, a)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      authorised = true;
-    }
+    if (ps && portalOwnsAttachment(ps, a)) authorised = true;
+    // Client portal login (bbp_client): only files of verified progress reports and client-safe project files of that client's projects.
+    const cs = authorised ? null : await getClientSession();
+    if (cs && clientOwnsAttachment(cs, a)) authorised = true;
+    if (!authorised && (ps || cs)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!authorised) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const full = path.join(UPLOAD_DIR, path.basename(a.stored_path));

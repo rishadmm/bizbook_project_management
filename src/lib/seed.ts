@@ -15,7 +15,9 @@ import { installDefaultWorkflows } from "./approvals/defaults";
 import { seedApprovalDemo } from "./approvals/seed-demo";
 import { seedInvoiceDetails, seedInvoiceDocuments } from "./seed-invoices";
 import { seedPortal } from "./seed-portal";
+import { seedClientPortal } from "./seed-client-portal";
 import { DEMO_PORTAL_PASSWORD } from "./portal-core";
+import { DEMO_CLIENT_PASSWORD } from "./client-portal-perms";
 
 const UPLOADS = process.env.OPS_UPLOAD_DIR ?? path.join(process.cwd(), "uploads");
 fs.rmSync(UPLOADS, { recursive: true, force: true });
@@ -886,6 +888,9 @@ seedApprovalDemo(db, { sara: U[4], daniel: U[7], imran: U[5], mariam: U[12], rah
 /* ---------------------------------------------------------------- subcontractor login portal (PORTAL_SPEC section 4) */
 const portalDemo = seedPortal(db, { today: TODAY, uploads: UPLOADS, admin: U[1], clerk: U[8] });
 
+/* ---------------------------------------------------------------- client portal (CLIENT_PORTAL_SPEC section 4) */
+const clientDemo = seedClientPortal(db, { today: TODAY, uploads: UPLOADS, admin: U[1] });
+
 /* ---------------------------------------------------------------- recent audit trail + activity feed */
 {
   const stamp = (daysAgo: number, hh: number, mm = 0) => { const d = new Date(Date.now() - daysAgo * 86_400_000); d.setUTCHours(hh, mm, 0, 0); return d; };
@@ -955,6 +960,8 @@ for (const a of q<any>("SELECT a.code, a.portal_token t, s.name sn, p.code pc FR
   console.log(`  ${a.code} ${a.pc} ${a.sn}: http://localhost:3100/portal/${a.t}`);
 console.log(`\nSubcontractor portal (login per company, password ${DEMO_PORTAL_PASSWORD} for every demo user; one user must change it, one is locked, one disabled):`);
 for (const p of portalDemo.slugs) console.log(`  ${p.sub.padEnd(36)} ${p.enabled ? `http://localhost:3100/p/${p.slug}  owner: ${p.owner}` : `/p/${p.slug}  (portal off)`}`);
+console.log(`\nClient portal (read-only; password ${DEMO_CLIENT_PASSWORD} for every demo user; one user must change it, one is disabled; one client hides financials, one hides subcontractor names):`);
+for (const p of clientDemo.rows) console.log(`  ${p.client.padEnd(38)} ${p.enabled ? `http://localhost:3100/c/${p.slug}  admin: ${p.admin}  (${p.note})` : `(${p.note})`}`);
 console.log("\nDemo logins (local demo only):");
 for (const u of q<any>("SELECT u.email, r.name role FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.id"))
   console.log(`  ${String(u.email).padEnd(30)} ${u.email === DEMO_ADMIN_EMAIL ? DEMO_ADMIN_PASSWORD : DEMO_USER_PASSWORD}   (${u.role})`);

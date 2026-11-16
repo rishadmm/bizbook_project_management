@@ -4,6 +4,7 @@ import { LEGACY_ROLE_MAP, SYSTEM_ROLES } from "./role-defaults";
 import { installDefaultWorkflows } from "./approvals/defaults";
 import { addDays } from "./format";
 import { uniqueSlug } from "./portal-core";
+import { uniqueClientSlug } from "./client-portal-core";
 
 export const DEMO_ADMIN_EMAIL = "admin@alnoor.demo";
 export const DEMO_ADMIN_PASSWORD = "Admin@12345";
@@ -73,6 +74,7 @@ export function migrate(db: DB): void {
 
   migrateInvoices(db);
   migratePortal(db, haveRoles);
+  migrateClientPortal(db, haveRoles);
 
   // One-time backfill: every role that can view projects also gets the Live Ops Map (guarded by a settings flag so a later manual revoke sticks).
   const flag = db.prepare("SELECT value FROM settings WHERE key = 'migr_ops_map_view'").get();
@@ -166,6 +168,26 @@ function migratePortal(db: DB, haveRoles: boolean): void {
     db.transaction(() => {
       db.prepare(`INSERT OR IGNORE INTO role_permissions(role_id, module, action) SELECT id, 'subcontractors', 'portal' FROM roles WHERE code IN ('admin', 'procurement')`).run();
       db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_portal_perm', '1')").run();
+    })();
+  }
+}
+
+/* ------------------------------------------------------------------ client portal (CLIENT_PORTAL_SPEC) */
+
+/** Idempotent: portal columns on `clients` (new tables come from schema.sql), a slug for every client and the `clients/portal` permission backfill. */
+function migrateClientPortal(db: DB, haveRoles: boolean): void {
+  ensureColumn(db, "clients", "portal_slug", "TEXT");
+  ensureColumn(db, "clients", "portal_enabled", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "clients", "portal_show_subcontractors", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(db, "clients", "portal_show_financials", "INTEGER NOT NULL DEFAULT 1");
+  try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_portal_slug ON clients(portal_slug)"); } catch { /* keep going without the index */ }
+  const noSlug = db.prepare("SELECT id, name FROM clients WHERE portal_slug IS NULL ORDER BY id").all() as { id: number; name: string }[];
+  for (const c of noSlug) db.prepare("UPDATE clients SET portal_slug = ? WHERE id = ?").run(uniqueClientSlug(db, c.name, c.id), c.id);
+  const flag = db.prepare("SELECT value FROM settings WHERE key = 'migr_client_portal_perm'").get();
+  if (!flag && haveRoles) {
+    db.transaction(() => {
+      db.prepare(`INSERT OR IGNORE INTO role_permissions(role_id, module, action) SELECT id, 'clients', 'portal' FROM roles WHERE code IN ('admin', 'project_manager')`).run();
+      db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_client_portal_perm', '1')").run();
     })();
   }
 }

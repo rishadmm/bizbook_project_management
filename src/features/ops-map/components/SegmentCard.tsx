@@ -3,12 +3,12 @@ import { AlertTriangle, ClipboardList, Copy, ExternalLink, FileText, X } from "l
 import { useState } from "react";
 import { formatMoney } from "@/lib/format";
 import { RESP_COLOR, RESP_LABEL, STATUS_COLOR } from "../calc";
-import type { OpsSegment, SegDerived } from "../types";
+import type { ClientMode, OpsSegment, SegDerived } from "../types";
 import { Bar, Dot, Sparkline, StatusPill, shortDate, slipColor, slipText } from "./bits";
 
 const fmtQ = (v: number) => (v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(v < 10 ? 2 : 1));
 
-export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onClose }: { seg: OpsSegment; d: SegDerived; color: string; projectCode: string; portalUrl: string | null; onClose: () => void }) {
+export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onClose, client }: { seg: OpsSegment; d: SegDerived; color: string; projectCode: string; portalUrl: string | null; onClose: () => void; client?: ClientMode }) {
   const [copied, setCopied] = useState(false);
   const qty = seg.qty && seg.qty > 0 ? seg.qty : null;
   const unitQty = (pctWk: number) => (qty ? (pctWk / 100) * qty : null);
@@ -56,7 +56,7 @@ export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onC
           <span className="om-muted">Last report</span>
           <span className="om-num font-extrabold" style={{ color: d.staleDays !== null && d.staleDays > 14 ? "#EF4444" : d.staleDays !== null && d.staleDays > 10 ? "#F59E0B" : undefined }}>{d.lastReport ? `${shortDate(d.lastReport)} · ${d.staleDays === 0 ? "today" : `${d.staleDays} d ago`}` : "none yet"}</span>
         </div>
-        {seg.assignmentId && (
+        {seg.assignmentId && !client && (
           <div className="grid grid-cols-3 gap-2 text-center">
             {([["Contract", seg.contractValue], ["Certified", seg.invoices.certified], ["Paid", seg.invoices.paid]] as const).map(([l, v]) => (
               <div key={l} className="om-soft rounded-xl px-2 py-1.5"><div className="om-h">{l}</div><div className="om-num text-[12px] font-extrabold">{formatMoney(v, { compact: true })}</div></div>
@@ -78,12 +78,21 @@ export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onC
         )}
       </div>
       <div className="om-line flex flex-wrap gap-1.5 border-t px-3 py-2.5">
-        <a className="om-btn !h-8 !text-[11.5px]" href={`/projects/${seg.projectId}?tab=stages`}><ExternalLink size={12} />Open stage</a>
-        <a className="om-btn !h-8 !text-[11.5px]" href={`/projects/${seg.projectId}?tab=progress`}><ClipboardList size={12} />Progress reports</a>
-        {portalUrl && (
-          <button type="button" className="om-btn !h-8 !text-[11.5px]" onClick={() => { void navigator.clipboard?.writeText(portalUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}><Copy size={12} />{copied ? "Copied" : "Copy portal link"}</button>
+        {client ? (
+          <>
+            <a className="om-btn !h-8 !text-[11.5px]" href={`${client.base}/projects/${seg.projectId}?tab=schedule`}><ExternalLink size={12} />Schedule</a>
+            <a className="om-btn !h-8 !text-[11.5px]" href={`${client.base}/projects/${seg.projectId}?tab=progress`}><ClipboardList size={12} />Progress</a>
+          </>
+        ) : (
+          <>
+            <a className="om-btn !h-8 !text-[11.5px]" href={`/projects/${seg.projectId}?tab=stages`}><ExternalLink size={12} />Open stage</a>
+            <a className="om-btn !h-8 !text-[11.5px]" href={`/projects/${seg.projectId}?tab=progress`}><ClipboardList size={12} />Progress reports</a>
+            {portalUrl && (
+              <button type="button" className="om-btn !h-8 !text-[11.5px]" onClick={() => { void navigator.clipboard?.writeText(portalUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}><Copy size={12} />{copied ? "Copied" : "Copy portal link"}</button>
+            )}
+            {!portalUrl && <span className="om-muted inline-flex items-center gap-1 px-1 text-[11px] font-semibold"><FileText size={11} />No portal link</span>}
+          </>
         )}
-        {!portalUrl && <span className="om-muted inline-flex items-center gap-1 px-1 text-[11px] font-semibold"><FileText size={11} />No portal link</span>}
       </div>
       <span className="hidden" style={{ color: STATUS_COLOR[d.status] }} />
     </div>

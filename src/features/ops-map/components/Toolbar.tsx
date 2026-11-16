@@ -7,11 +7,11 @@ const MODES: { key: ColorMode; label: string }[] = [
   { key: "health", label: "Health" }, { key: "sub", label: "Subcontractor" }, { key: "cause", label: "Delay cause" }, { key: "cost", label: "Cost" }, { key: "stale", label: "Staleness" },
 ];
 
-export function ColorSwitch({ mode, onChange }: { mode: ColorMode; onChange: (m: ColorMode) => void }) {
+export function ColorSwitch({ mode, onChange, modes }: { mode: ColorMode; onChange: (m: ColorMode) => void; modes?: ColorMode[] }) {
   return (
     <div className="om-seg om-hscroll" role="group" aria-label="Colour by">
       <span className="om-h flex items-center whitespace-nowrap px-2">Colour by</span>
-      {MODES.map((m) => <button key={m.key} type="button" aria-pressed={mode === m.key} onClick={() => onChange(m.key)}>{m.label}</button>)}
+      {MODES.filter((m) => !modes || modes.includes(m.key)).map((m) => <button key={m.key} type="button" aria-pressed={mode === m.key} onClick={() => onChange(m.key)}>{m.label}</button>)}
     </div>
   );
 }

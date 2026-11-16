@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Tabs, resolveTab } from "@/components/ui/Tabs";
 import { Button } from "@/components/ui/Button";
 import { CardSection } from "@/components/ui/Card";
 import { ModalButton } from "@/components/ui/Modal";
@@ -11,16 +12,19 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { clientProjects, clientTenders, getClient } from "@/features/clients/queries";
 import { ClientForm } from "@/features/clients/ClientForm";
 import { deleteClient } from "@/features/clients/actions";
-import { can, requirePage } from "@/lib/auth";
+import { can, isAdminUser, requirePage } from "@/lib/auth";
+import ClientPortalTab from "@/features/client-portal-admin/components/ClientPortalTab";
 import ActionForm from "@/components/ActionForm";
 
-export default async function ClientPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const me = await requirePage("clients");
   const { id: s } = await params;
   const id = Number(s);
   const c = Number.isInteger(id) ? getClient(id) : undefined;
   if (!c) notFound();
   const tenders = clientTenders(id); const projects = clientProjects(id);
+  const tabs = [{ key: "overview", label: "Overview" }, ...(can(me, "clients", "portal") ? [{ key: "portal", label: "Portal access" }] : [])];
+  const tab = resolveTab(await searchParams, tabs);
   return (
     <>
       <PageHeader title={c.name} breadcrumbs={[{ label: "Clients", href: "/clients" }, { label: c.name }]} badges={<StatusBadge kind="clientType" value={c.type} />}
@@ -28,6 +32,10 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
           {can(me, "clients", "edit") && <ModalButton label="Edit" title="Edit client" wide><ClientForm client={c} /></ModalButton>}
           {can(me, "clients", "delete") && <ActionForm action={deleteClient}><input type="hidden" name="id" value={c.id} /><Button type="submit" variant="danger">Delete</Button></ActionForm>}
         </>} />
+      <Tabs tabs={tabs} active={tab} basePath={`/clients/${id}`} />
+      {tab === "portal" && <ClientPortalTab client={{ id: c.id, name: c.name, portal_slug: c.portal_slug ?? null, portal_enabled: c.portal_enabled ?? 0, portal_show_subcontractors: c.portal_show_subcontractors ?? 1, portal_show_financials: c.portal_show_financials ?? 1 }}
+        canManage={can(me, "clients", "portal")} canViewAs={isAdminUser(me) && can(me, "clients", "portal")} />}
+      {tab === "overview" && <>
       <CardSection title="Contact" className="mb-5">
         <dl className="grid gap-3 text-sm sm:grid-cols-4">
           {([["Contact person", c.contact_person], ["Email", c.email], ["Phone", c.phone], ["Address", c.address]] as const).map(([k, v]) => <div key={k}><dt className="text-xs font-medium text-slate-500">{k}</dt><dd>{v || "-"}</dd></div>)}
@@ -58,6 +66,7 @@ export default async function ClientPage({ params }: { params: Promise<{ id: str
           )}
         </CardSection>
       </div>
+      </>}
     </>
   );
 }

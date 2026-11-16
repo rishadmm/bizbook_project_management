@@ -22,7 +22,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
   {
     code: "project_manager", name: "Project manager", description: "Runs projects, progress, subcontractors and certificates.",
     perms: {
-      ...EVERYONE, ...view("tenders", "clients", "ops_map"),
+      ...EVERYONE, ...view("tenders", "ops_map"), clients: ["view", "portal"],
       projects: ["view", "create", "edit"], project_map: ["view", "edit"], progress: ["view", "create", "verify"], project_costs: ["view", "create"],
       subcontractors: ["view", "create", "edit"], invoices: ["view"], certificates: ["view", "issue"],
     },

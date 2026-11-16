@@ -6,7 +6,7 @@ import { migrate } from "./migrate";
 export type DB = Database.Database;
 
 /** Bump when schema/migrations change so a hot-reloaded dev server re-runs them. */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const g = globalThis as unknown as { __opsDb?: DB; __opsDbV?: number };
 
 /** DB file path (override with OPS_DB_PATH). */

@@ -5,7 +5,7 @@ export const MODULES = {
   tenders: { label: "Tenders", group: "Sales / Tendering", actions: ["view", "create", "edit", "delete", "submit", "approve", "export"] },
   tender_budget: { label: "Tender budget", group: "Sales / Tendering", actions: ["view", "edit", "edit_margin", "export"] },
   lost_analysis: { label: "Loss analysis", group: "Sales / Tendering", actions: ["view", "edit"] },
-  clients: { label: "Clients", group: "Sales / Tendering", actions: ["view", "create", "edit", "delete"] },
+  clients: { label: "Clients", group: "Sales / Tendering", actions: ["view", "create", "edit", "delete", "portal"] },
   projects: { label: "Projects", group: "Projects", actions: ["view", "create", "edit", "delete"] },
   project_map: { label: "Project map", group: "Projects", actions: ["view", "edit"] },
   ops_map: { label: "Live Ops Map", group: "Projects", actions: ["view"] },

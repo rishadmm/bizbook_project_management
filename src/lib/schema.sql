@@ -440,3 +440,30 @@ CREATE TABLE IF NOT EXISTS portal_change_requests (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pcr2_sub ON portal_change_requests(subcontractor_id, status);
+
+-- ---------------------------------------------------------------- client portal (CLIENT_PORTAL_SPEC): read-only reporting users, sessions, audit
+CREATE TABLE IF NOT EXISTS client_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, job_title TEXT,
+  role TEXT NOT NULL DEFAULT 'viewer',
+  password_hash TEXT, status TEXT NOT NULL DEFAULT 'active',
+  must_change_password INTEGER NOT NULL DEFAULT 0, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until TEXT,
+  last_login_at TEXT, previous_login_at TEXT, password_changed_at TEXT,
+  project_scope TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_client_users_email ON client_users(client_id, lower(email));
+CREATE TABLE IF NOT EXISTS client_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE,
+  client_user_id INTEGER REFERENCES client_users(id) ON DELETE CASCADE,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  impersonated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen_at TEXT, ip TEXT, user_agent TEXT, revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS client_auth_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, client_user_id INTEGER, email TEXT, event TEXT NOT NULL,
+  ip TEXT, user_agent TEXT, detail TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cae_client ON client_auth_events(client_id, id);

@@ -130,3 +130,6 @@ export interface Derived {
   seg: Map<string, SegDerived>;
   proj: Map<number, ProjectDerived>;
 }
+
+/** Client portal mode of the Live Ops Map: read-only, no cost views, links point into the client portal (`base` = /c/<slug>). */
+export interface ClientMode { base: string; showSubs: boolean; showFinancials: boolean }

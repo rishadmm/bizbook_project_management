@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import dynamic from "next/dynamic";
 import { addDays, daysBetween } from "@/lib/format";
 import { computeAll, computeKpis, computeParties, costColor, RESP_COLOR, STATUS_COLOR, stalenessColor, SELF_COLOR } from "../calc";
-import type { ColorMode, OpsIssue, OpsMapData, OpsProject, OpsSegment } from "../types";
+import type { ClientMode, ColorMode, OpsIssue, OpsMapData, OpsProject, OpsSegment } from "../types";
 import KpiStrip, { type Emphasis } from "./KpiStrip";
 import Legend, { subColor } from "./Legend";
 import ProjectDrawer, { DelayChart } from "./ProjectDrawer";
@@ -21,7 +21,7 @@ const MapCanvas = dynamic(() => import("./MapCanvas"), { ssr: false });
 export interface InitialState { project: string | null; segment: string | null; color: string | null; date: string | null; sub: string | null; embed: boolean }
 
 const RAIL_W = 312, DRAWER_W = 380, GAP = 12, RAIL_MIN = 84, AUTO_COLLAPSE_BELOW = 1700;
-const MODES: ColorMode[] = ["health", "sub", "cause", "cost", "stale"];
+const ALL_MODES: ColorMode[] = ["health", "sub", "cause", "cost", "stale"];
 const isIso = (s: string | null): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 function unionBbox(ps: OpsProject[]): [number, number, number, number] | null {
@@ -29,8 +29,10 @@ function unionBbox(ps: OpsProject[]): [number, number, number, number] | null {
   return ps.reduce<[number, number, number, number]>((b, p) => [Math.min(b[0], p.bbox[0]), Math.min(b[1], p.bbox[1]), Math.max(b[2], p.bbox[2]), Math.max(b[3], p.bbox[3])], [...ps[0].bbox]);
 }
 
-export default function OpsMapApp({ data, initial }: { data: OpsMapData; initial: InitialState }) {
+export default function OpsMapApp({ data, initial, clientMode }: { data: OpsMapData; initial: InitialState; clientMode?: ClientMode }) {
   const today = data.today;
+  // client portal: no Cost mode (and no Subcontractor mode when the names are hidden)
+  const MODES = useMemo(() => (clientMode ? ALL_MODES.filter((m) => m !== "cost" && (m !== "sub" || clientMode.showSubs)) : ALL_MODES), [clientMode]);
   const rootRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const mapApi = useRef<MapApi | null>(null);
@@ -238,39 +240,46 @@ export default function OpsMapApp({ data, initial }: { data: OpsMapData; initial
     return () => window.removeEventListener("keydown", onKey);
   }, [selKey, highlight, emphasis, selProject, range, toggleFullscreen, togglePlay]);
 
-  // URL state
+  // URL state. Debounced and skipped while the time machine plays: browsers (Safari) throw a SecurityError
+  // after 100 history.replaceState calls in 10 s, which playback / slider scrubbing would otherwise exceed.
   useEffect(() => {
-    const u = new URL(window.location.href);
-    const set = (k: string, v: string | null) => (v ? u.searchParams.set(k, v) : u.searchParams.delete(k));
-    set("project", selProject ? String(selProject) : null);
-    set("segment", selKey);
-    set("color", mode !== "health" ? mode : null);
-    set("date", date !== today ? date : null);
-    set("sub", filters.subs.length ? filters.subs.join(",") : null);
-    window.history.replaceState(null, "", u.toString());
-  }, [selProject, selKey, mode, date, filters.subs, today]);
+    if (playing) return;
+    const t = setTimeout(() => {
+      const u = new URL(window.location.href);
+      const set = (k: string, v: string | null) => (v ? u.searchParams.set(k, v) : u.searchParams.delete(k));
+      set("project", selProject ? String(selProject) : null);
+      set("segment", selKey);
+      set("color", mode !== "health" ? mode : null);
+      set("date", date !== today ? date : null);
+      set("sub", filters.subs.length ? filters.subs.join(",") : null);
+      const next = u.toString();
+      if (next === window.location.href) return;
+      try { window.history.replaceState(window.history.state, "", next); } catch { /* rate-limited by the browser: the URL is only a convenience */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [selProject, selKey, mode, date, filters.subs, today, playing]);
   const share = () => { void navigator.clipboard?.writeText(window.location.href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); }); };
 
   const basemap: Basemap = sat ? "sat" : night ? "dark" : "light";
   const selSeg = selKey ? data.segments.find((s) => s.key === selKey) ?? null : null;
   const selProj = selProject ? data.projects.find((p) => p.id === selProject) ?? null : null;
-  const portalUrl = (s: OpsSegment) => (s.portalToken && typeof window !== "undefined" ? `${window.location.origin}/portal/${s.portalToken}` : null);
+  const portalUrl = (s: OpsSegment) => (!clientMode && s.portalToken && typeof window !== "undefined" ? `${window.location.origin}/portal/${s.portalToken}` : null);
   const pickIssue = (i: OpsIssue) => { const k = i.segKeys[0]; if (k) selectSeg(k, [i.lat, i.lng]); else selectProject(i.projectId); };
   const worst = () => { const p = projects.find((x) => x.code === kpis.worstProject); if (p) selectProject(p.id); };
 
   const cardEl = selSeg && derived.seg.get(selSeg.key) && (
-    <SegmentCard seg={selSeg} d={derived.seg.get(selSeg.key)!} color={colorOf(selSeg)} projectCode={data.projects.find((p) => p.id === selSeg.projectId)?.code ?? ""} portalUrl={portalUrl(selSeg)} onClose={() => setSelKey(null)} />
+    <SegmentCard seg={selSeg} d={derived.seg.get(selSeg.key)!} color={colorOf(selSeg)} projectCode={data.projects.find((p) => p.id === selSeg.projectId)?.code ?? ""} portalUrl={portalUrl(selSeg)} client={clientMode} onClose={() => setSelKey(null)} />
   );
   const drawerEl = selProj && (
     <ProjectDrawer project={selProj} data={data} segs={data.segments.filter((s) => s.projectId === selProj.id)} derived={derived} parties={partiesProj} highlight={highlight} onHighlight={setHighlight}
-      colorOf={colorOf} selectedKey={selKey} onSelectSeg={(k) => selectSeg(k, undefined, true)} onClose={() => selectProject(null)} bare={narrow}
+      colorOf={colorOf} selectedKey={selKey} onSelectSeg={(k) => selectSeg(k, undefined, true)} onClose={() => selectProject(null)} bare={narrow} client={clientMode}
       onPickSub={(id) => setFilters((f) => ({ ...f, subs: f.subs.includes(id) ? f.subs.filter((x) => x !== id) : [id] }))} />
   );
   const railEl = (
-    <ProjectsRail data={data} derived={derived} projects={projects} filters={filters} setFilters={setFilters} selected={selProject} onSelect={(id) => selectProject(id)} onCollapse={() => (narrow ? setSheetOpen(false) : setRailOpen(false))} />
+    <ProjectsRail hideSubs={!!clientMode && !clientMode.showSubs} data={data} derived={derived} projects={projects} filters={filters} setFilters={setFilters} selected={selProject} onSelect={(id) => selectProject(id)} onCollapse={() => (narrow ? setSheetOpen(false) : setRailOpen(false))} />
   );
 
-  const rootStyle = initial.embed ? "fixed inset-0 z-[2000]" : "fixed bottom-0 left-0 right-0 top-[105px] z-[40] md:left-[248px] md:top-16";
+  const rootStyle = initial.embed ? "fixed inset-0 z-[2000]" : clientMode ? "fixed bottom-[56px] left-0 right-0 top-16 z-[40] md:bottom-0 md:left-[248px]" : "fixed bottom-0 left-0 right-0 top-[105px] z-[40] md:left-[248px] md:top-16";
   const sheetH = sheetOpen ? "min(48%, 340px)" : "46px";
 
   return (
@@ -287,9 +296,9 @@ export default function OpsMapApp({ data, initial }: { data: OpsMapData; initial
 
       {/* top: KPI strip + colour-by + tools */}
       <div className="pointer-events-none absolute z-[1001] flex flex-col gap-2" style={{ top: GAP, left, right }}>
-        <div className="pointer-events-auto"><KpiStrip k={kpis} emphasis={emphasis} setEmphasis={setEmphasis} onWorst={worst} /></div>
+        <div className="pointer-events-auto"><KpiStrip k={kpis} emphasis={emphasis} setEmphasis={setEmphasis} onWorst={worst} hideCost={!!clientMode} /></div>
         <div className={`pointer-events-auto flex items-center justify-between gap-2 ${narrow ? "om-hscroll" : "flex-wrap"}`}>
-          <ColorSwitch mode={mode} onChange={setMode} />
+          <ColorSwitch mode={mode} onChange={setMode} modes={MODES} />
           <Tools night={night} onNight={() => setNight(!night)} basemap={basemap} onBasemap={() => setSat(!sat)} compare={compare} onCompare={() => setCompare(!compare)}
             fullscreen={fullscreen} onFullscreen={toggleFullscreen} onReset={reset} onShare={share} copied={copied} onZoom={(d) => (d > 0 ? mapApi.current?.zoomIn() : mapApi.current?.zoomOut())} />
         </div>

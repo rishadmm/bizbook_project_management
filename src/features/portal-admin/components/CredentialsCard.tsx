@@ -5,11 +5,11 @@ import { buttonClass } from "@/components/ui/Button";
 import type { IssuedCredentials } from "../types";
 
 /** One-time credentials card: portal URL, e-mail and temporary password with copy / print. Rendered from the action response only (never persisted). */
-export default function CredentialsCard({ cred, company, tenant }: { cred: IssuedCredentials; company: string; tenant: string }) {
+export default function CredentialsCard({ cred, company, tenant, basePath = "/p", portalLabel = "Subcontractor Portal" }: { cred: IssuedCredentials; company: string; tenant: string; basePath?: string; portalLabel?: string }) {
   const [copied, setCopied] = useState(false);
-  const url = typeof window === "undefined" ? `/p/${cred.slug}` : `${window.location.origin}/p/${cred.slug}`;
+  const url = typeof window === "undefined" ? `${basePath}/${cred.slug}` : `${window.location.origin}${basePath}/${cred.slug}`;
   const message = [
-    `Subcontractor Portal - ${company}`,
+    `${portalLabel} - ${company}`,
     `Hello ${cred.name}, your portal access for ${tenant} is ready.`,
     "",
     `Portal: ${url}`,
@@ -28,7 +28,7 @@ export default function CredentialsCard({ cred, company, tenant }: { cred: Issue
     const w = window.open("", "_blank", "width=640,height=640");
     if (!w) return;
     const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-    w.document.write(`<html><head><title>Portal credentials</title><style>body{font-family:system-ui,sans-serif;padding:32px;color:#0f172a}h1{font-size:20px}dl{margin-top:20px}dt{font-size:12px;color:#64748b;text-transform:uppercase;margin-top:14px}dd{margin:2px 0 0;font-size:16px;font-weight:700;font-family:ui-monospace,monospace}p{color:#475569;font-size:13px;margin-top:24px}</style></head><body><h1>Subcontractor Portal - ${esc(company)}</h1><p style="margin-top:4px">${esc(tenant)}</p><dl><dt>Portal</dt><dd>${esc(url)}</dd><dt>Name</dt><dd>${esc(cred.name)}</dd><dt>Email</dt><dd>${esc(cred.email)}</dd><dt>Temporary password</dt><dd>${esc(cred.password)}</dd></dl><p>You will be asked to choose a new password the first time you sign in. Keep this sheet private.</p></body></html>`);
+    w.document.write(`<html><head><title>Portal credentials</title><style>body{font-family:system-ui,sans-serif;padding:32px;color:#0f172a}h1{font-size:20px}dl{margin-top:20px}dt{font-size:12px;color:#64748b;text-transform:uppercase;margin-top:14px}dd{margin:2px 0 0;font-size:16px;font-weight:700;font-family:ui-monospace,monospace}p{color:#475569;font-size:13px;margin-top:24px}</style></head><body><h1>${esc(portalLabel)} - ${esc(company)}</h1><p style="margin-top:4px">${esc(tenant)}</p><dl><dt>Portal</dt><dd>${esc(url)}</dd><dt>Name</dt><dd>${esc(cred.name)}</dd><dt>Email</dt><dd>${esc(cred.email)}</dd><dt>Temporary password</dt><dd>${esc(cred.password)}</dd></dl><p>You will be asked to choose a new password the first time you sign in. Keep this sheet private.</p></body></html>`);
     w.document.close(); w.focus(); w.print();
   }
   return (

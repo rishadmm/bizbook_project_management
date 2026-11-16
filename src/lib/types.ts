@@ -48,6 +48,7 @@ export interface User extends Base {
 export interface Client extends Base {
   name: string; type: ClientType; contact_person: Nullable<string>; email: Nullable<string>;
   phone: Nullable<string>; address: Nullable<string>; notes: Nullable<string>;
+  portal_slug?: Nullable<string>; portal_enabled?: number; portal_show_subcontractors?: number; portal_show_financials?: number;
 }
 export interface Attachment extends Base {
   entity_type: EntityType; entity_id: number; category: Nullable<string>; filename: string;

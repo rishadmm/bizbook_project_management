@@ -4,6 +4,8 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 90_000,
+  // dev servers compile routes on first hit: give assertions more than the 5 s default
+  expect: { timeout: 20_000 },
   workers: 1,
   fullyParallel: false,
   reporter: [["list"]],

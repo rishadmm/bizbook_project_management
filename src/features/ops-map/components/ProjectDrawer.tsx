@@ -3,7 +3,7 @@ import { ExternalLink, X } from "lucide-react";
 import { Bar as RBar, BarChart, Cell, LabelList, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { formatMoney } from "@/lib/format";
 import { RESP_COLOR, RESP_LABEL, STATUS_COLOR, STATUS_LABEL } from "../calc";
-import type { Derived, OpsIssue, OpsMapData, OpsProject, OpsSegment, Party, SegStatus } from "../types";
+import type { ClientMode, Derived, OpsIssue, OpsMapData, OpsProject, OpsSegment, Party, SegStatus } from "../types";
 import { Dot, RAG_COLOR, RagPill, Ring, Section, daysBetween, shortDate, slipColor, slipText } from "./bits";
 
 /* ---------------------------------------------------------------- line of balance */
@@ -87,9 +87,9 @@ export function DelayChart({ parties, highlight, onHighlight }: { parties: Party
 
 /* ---------------------------------------------------------------- drawer */
 
-export default function ProjectDrawer({ project, data, segs, derived, parties, highlight, onHighlight, colorOf, selectedKey, onSelectSeg, onClose, bare, onPickSub }: {
+export default function ProjectDrawer({ project, data, segs, derived, parties, highlight, onHighlight, colorOf, selectedKey, onSelectSeg, onClose, bare, onPickSub, client }: {
   project: OpsProject; data: OpsMapData; segs: OpsSegment[]; derived: Derived; parties: Party[]; highlight: string | null; onHighlight: (k: string | null) => void;
-  colorOf: (s: OpsSegment) => string; selectedKey: string | null; onSelectSeg: (k: string) => void; onClose: () => void; bare?: boolean; onPickSub: (subId: number) => void;
+  colorOf: (s: OpsSegment) => string; selectedKey: string | null; onSelectSeg: (k: string) => void; onClose: () => void; bare?: boolean; onPickSub: (subId: number) => void; client?: ClientMode;
 }) {
   const d = derived.proj.get(project.id)!;
   const rc = RAG_COLOR[d.rag];
@@ -119,11 +119,11 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><span className="om-muted text-[11px] font-extrabold tracking-wide">{project.code}</span><RagPill rag={d.rag} /></div>
             <h2 className="mt-1 text-[17px] font-extrabold leading-tight">{project.name}</h2>
-            <div className="om-muted mt-0.5 text-[11.5px] font-semibold">{project.client ?? "—"}{project.managerName ? ` · PM ${project.managerName}` : ""}{project.contractValue ? ` · ${formatMoney(project.contractValue, { compact: true })}` : ""}</div>
+            <div className="om-muted mt-0.5 text-[11.5px] font-semibold">{project.client ?? "—"}{project.managerName ? ` · PM ${project.managerName}` : ""}{!client && project.contractValue ? ` · ${formatMoney(project.contractValue, { compact: true })}` : ""}</div>
           </div>
           {!bare && <button type="button" className="om-btn !h-8 !w-8 !px-0" onClick={onClose} aria-label="Close project panel"><X size={15} /></button>}
         </div>
-        <a href={`/projects/${project.id}`} className="mt-2 inline-flex items-center gap-1 text-[12px] font-extrabold" style={{ color: "var(--om-primary)" }}>Open project <ExternalLink size={12} /></a>
+        <a href={client ? `${client.base}/projects/${project.id}` : `/projects/${project.id}`} className="mt-2 inline-flex items-center gap-1 text-[12px] font-extrabold" style={{ color: "var(--om-primary)" }}>{client ? "Open project report" : "Open project"} <ExternalLink size={12} /></a>
       </div>
       <div className="om-scroll om-line min-h-0 flex-1 divide-y border-t" style={{ borderColor: "var(--om-border)" }}>
         <Section title={derived.forecast ? "Completion forecast" : "Completion forecast"}>
@@ -135,8 +135,8 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
               <div className="inline-flex items-center rounded-lg px-2 py-1 text-[12.5px] font-extrabold" style={{ background: `${slipColor(d.delayDays)}22`, color: slipColor(d.delayDays) }}>{d.delayDays > 0 ? `${d.delayDays} days late` : "On plan"}</div>
             </div>
           </div>
-          <div className="mt-3 grid grid-cols-4 gap-1.5 text-center">
-            {([["SPI", d.spi], ["CPI", d.cpi]] as const).map(([l, v]) => (
+          <div className={`mt-3 grid ${client ? "grid-cols-3" : "grid-cols-4"} gap-1.5 text-center`}>
+            {([["SPI", d.spi], ["CPI", d.cpi]] as const).filter(([l]) => !client || l !== "CPI").map(([l, v]) => (
               <div key={l} className="om-soft rounded-xl py-1.5"><div className="om-h">{l}</div><div className="om-num text-[14px] font-extrabold" style={{ color: v === null ? undefined : v >= 0.95 ? "#22C55E" : v >= 0.85 ? "#F59E0B" : "#EF4444" }}>{v === null ? "—" : v.toFixed(2)}</div></div>
             ))}
             <div className="om-soft rounded-xl py-1.5"><div className="om-h">Done</div><div className="om-num text-[12px] font-extrabold">{project.totalQty ? q(d.completedQty) : "—"}</div></div>
@@ -155,7 +155,7 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
           <DelayChart parties={parties} highlight={highlight} onHighlight={onHighlight} />
         </Section>
 
-        <Section title="Subcontractor scorecard">
+        <Section title={client ? "Contractor progress" : "Subcontractor scorecard"}>
           <div className="-mx-1 overflow-x-auto">
             <table className="w-full text-[11px] font-semibold">
               <thead><tr className="om-muted text-left text-[9.5px] font-extrabold uppercase tracking-wide"><th className="px-1 pb-1">Sub</th><th className="px-1 pb-1 text-right">Seg</th><th className="px-1 pb-1 text-right">Done</th><th className="px-1 pb-1 text-right">SPI</th><th className="px-1 pb-1 text-right">Slip</th><th className="px-1 pb-1 text-right">Iss</th><th className="px-1 pb-1 text-right">Rep</th></tr></thead>
@@ -181,7 +181,7 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
             <div className="space-y-2">{issues.slice(0, 5).map((i) => (
               <div key={i.id} className="flex items-start gap-2">
                 <span className="om-chip mt-0.5 shrink-0" style={{ background: `${RESP_COLOR[i.resp]}22`, color: RESP_COLOR[i.resp] }}>{RESP_LABEL[i.resp]}</span>
-                <div className="min-w-0 flex-1 text-[12px] font-bold leading-snug">{i.title}<div className="om-muted text-[10.5px] font-semibold">Raised {shortDate(i.raisedOn)}{i.impactDays ? ` · ${i.impactDays} d impact` : ""}{i.impactCost ? ` · ${formatMoney(i.impactCost, { compact: true })}` : ""}</div></div>
+                <div className="min-w-0 flex-1 text-[12px] font-bold leading-snug">{i.title}<div className="om-muted text-[10.5px] font-semibold">Raised {shortDate(i.raisedOn)}{i.impactDays ? ` · ${i.impactDays} d impact` : ""}{!client && i.impactCost ? ` · ${formatMoney(i.impactCost, { compact: true })}` : ""}</div></div>
               </div>
             ))}</div>
           )}

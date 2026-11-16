@@ -49,13 +49,15 @@ function historyOf(reps: RepRow[], qty: number | null, completed: boolean): Hist
 }
 
 /** One JSON payload for the Live Ops Map: projects, subcontract segments (sliced geometry), issues, delay events. */
-export function getOpsMapData(opts: { includePortal?: boolean } = {}): OpsMapData {
+export function getOpsMapData(opts: { includePortal?: boolean; /** restrict to these projects (client portal) */ projectIds?: number[] } = {}): OpsMapData {
   const db = getDb();
   const today = todayISO();
-  const projectsRaw = db.prepare(
+  const only = opts.projectIds ? new Set(opts.projectIds) : null;
+  const projectsAll = db.prepare(
     `SELECT p.*, c.name AS client_name, u.name AS manager_name FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN users u ON u.id = p.manager_id
      WHERE p.status NOT IN ('cancelled') ORDER BY p.code`,
   ).all() as ProjectRow[];
+  const projectsRaw = only ? projectsAll.filter((p) => only.has(p.id)) : projectsAll;
   const stages = db.prepare("SELECT * FROM stages ORDER BY project_id, sort, id").all() as StageRow[];
   const asgs = db.prepare(
     `SELECT a.*, s.name AS sub_name, s.rating, s.trade FROM assignments a JOIN subcontractors s ON s.id = a.subcontractor_id WHERE a.status <> 'terminated' ORDER BY a.id`,

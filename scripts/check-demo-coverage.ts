@@ -254,6 +254,30 @@ atLeast("Audit", "activity entries (last 7 days)", one<{ n: number }>("SELECT CO
   for (const [k, n] of Object.entries(kinds)) atLeast("Portal", `companies with action item: ${k}`, n, 1);
 }
 
+/* ---------------------------------------------------------------- Client portal (CLIENT_PORTAL_SPEC section 4) */
+{
+  const withProjects = all<{ id: number; name: string; portal_slug: string | null; portal_enabled: number }>("SELECT c.id, c.name, c.portal_slug, c.portal_enabled FROM clients c WHERE EXISTS (SELECT 1 FROM projects p WHERE p.client_id = c.id)");
+  check("Client portal", "clients with projects that have a slug + portal enabled", withProjects.filter((c) => c.portal_slug && c.portal_enabled).length, `= ${withProjects.length}`, withProjects.every((c) => c.portal_slug && c.portal_enabled));
+  const noAdmin = withProjects.filter((c) => !one<{ n: number }>("SELECT COUNT(*) n FROM client_users WHERE client_id = ? AND role = 'admin' AND status = 'active'", c.id).n);
+  check("Client portal", "clients with projects without an active admin", noAdmin.length, "= 0", noAdmin.length === 0);
+  const orphan = all("SELECT DISTINCT u.client_id FROM client_users u WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.client_id = u.client_id)");
+  check("Client portal", "client users whose client has no project", orphan.length, "= 0", orphan.length === 0);
+  const noProjPortal = all("SELECT id FROM clients c WHERE c.portal_enabled = 1 AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.client_id = c.id)");
+  check("Client portal", "clients without projects that have the portal on", noProjPortal.length, "= 0", noProjPortal.length === 0);
+  atLeast("Client portal", "clients without projects (no portal)", one<{ n: number }>("SELECT COUNT(*) n FROM clients c WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.client_id = c.id)").n, 2);
+  atLeast("Client portal", "client users", one<{ n: number }>("SELECT COUNT(*) n FROM client_users").n, 8);
+  atLeast("Client portal", "user who must change the password", one<{ n: number }>("SELECT COUNT(*) n FROM client_users WHERE must_change_password = 1").n, 1);
+  atLeast("Client portal", "disabled user", one<{ n: number }>("SELECT COUNT(*) n FROM client_users WHERE status = 'disabled'").n, 1);
+  atLeast("Client portal", "client with financials hidden", one<{ n: number }>("SELECT COUNT(*) n FROM clients WHERE portal_enabled = 1 AND portal_show_financials = 0").n, 1);
+  atLeast("Client portal", "client with subcontractor names hidden", one<{ n: number }>("SELECT COUNT(*) n FROM clients WHERE portal_enabled = 1 AND portal_show_subcontractors = 0").n, 1);
+  atLeast("Client portal", "viewer limited to one project (project_scope)", one<{ n: number }>("SELECT COUNT(*) n FROM client_users WHERE project_scope IS NOT NULL").n, 1);
+  atLeast("Client portal", "client auth events", one<{ n: number }>("SELECT COUNT(*) n FROM client_auth_events").n, 25);
+  const noPhotos = withProjects.filter((c) => !one<{ n: number }>(`SELECT COUNT(*) n FROM attachments a JOIN progress_reports r ON r.id = a.entity_id JOIN projects p ON p.id = r.project_id
+    WHERE a.entity_type = 'progress' AND a.mime LIKE 'image/%' AND r.status = 'verified' AND p.client_id = ?`, c.id).n);
+  check("Client portal", "clients with projects without a verified site photo", noPhotos.length, "= 0", noPhotos.length === 0);
+  atLeast("Client portal", "clients with at least one open issue (kind=issue)", withProjects.filter((c) => one<{ n: number }>("SELECT COUNT(*) n FROM issues i JOIN projects p ON p.id = i.project_id WHERE p.client_id = ? AND i.kind = 'issue' AND i.status <> 'closed'", c.id).n > 0).length, 3);
+}
+
 /* ---------------------------------------------------------------- report */
 console.log(`\nDemo data coverage as of ${today}\n`);
 const w = { area: 10, check: 62, value: 24, need: 22 };

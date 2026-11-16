@@ -9,8 +9,8 @@ export interface Filters { q: string; rag: Rag[]; category: string; status: stri
 export const EMPTY_FILTERS: Filters = { q: "", rag: [], category: "", status: "", subs: [], resp: "" };
 export const filtersActive = (f: Filters) => !!(f.q || f.rag.length || f.category || f.status || f.subs.length || f.resp);
 
-export default function ProjectsRail({ data, derived, projects, filters, setFilters, selected, onSelect, onCollapse }: {
-  data: OpsMapData; derived: Derived; projects: OpsProject[]; filters: Filters; setFilters: (f: Filters) => void; selected: number | null; onSelect: (id: number) => void; onCollapse: () => void;
+export default function ProjectsRail({ hideSubs, data, derived, projects, filters, setFilters, selected, onSelect, onCollapse }: {
+  hideSubs?: boolean; data: OpsMapData; derived: Derived; projects: OpsProject[]; filters: Filters; setFilters: (f: Filters) => void; selected: number | null; onSelect: (id: number) => void; onCollapse: () => void;
 }) {
   const [subsOpen, setSubsOpen] = useState(false);
   const set = (p: Partial<Filters>) => setFilters({ ...filters, ...p });
@@ -63,10 +63,10 @@ export default function ProjectsRail({ data, derived, projects, filters, setFilt
           <select className="om-select" aria-label="Status" value={filters.status} onChange={(e) => set({ status: e.target.value })}><option value="">Any status</option>{statuses.map((c) => <option key={c} value={c}>{c.replace(/_/g, " ")}</option>)}</select>
         </div>
         <div className="flex gap-1">
-          <button type="button" className="om-select flex items-center justify-between text-left" aria-expanded={subsOpen} onClick={() => setSubsOpen(!subsOpen)}>{filters.subs.length ? `${filters.subs.length} subcontractor${filters.subs.length > 1 ? "s" : ""}` : "All subcontractors"}<span className="om-muted">▾</span></button>
+          {!hideSubs && <button type="button" className="om-select flex items-center justify-between text-left" aria-expanded={subsOpen} onClick={() => setSubsOpen(!subsOpen)}>{filters.subs.length ? `${filters.subs.length} subcontractor${filters.subs.length > 1 ? "s" : ""}` : "All subcontractors"}<span className="om-muted">▾</span></button>}
           <select className="om-select" aria-label="Delay responsibility" value={filters.resp} onChange={(e) => set({ resp: e.target.value })}><option value="">Any delay cause</option>{["subcontractor", "company", "client", "authority", "weather", "utility_clash", "other"].map((r) => <option key={r} value={r}>{RESP_LABEL[r]}</option>)}</select>
         </div>
-        {subsOpen && (
+        {subsOpen && !hideSubs && (
           <div className="om-soft om-scroll max-h-40 space-y-0.5 rounded-xl p-1.5">
             {data.subs.map((s) => {
               const on = filters.subs.includes(s.id);
