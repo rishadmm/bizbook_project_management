@@ -3,7 +3,7 @@ import { parseDbDate } from "@/lib/auth";
 import { MODULE_KEYS, MODULES, type ModuleKey } from "@/lib/permissions";
 import type { User } from "@/lib/types";
 
-export interface UserListRow extends User { department_name: string | null; role_name: string | null; role_code: string | null }
+export interface UserListRow extends User { department_name: string | null; role_name: string | null; role_code: string | null; entities?: string }
 export interface UserFilters { q?: string; role?: string; status?: string; department?: string }
 
 export function listUsers(f: UserFilters = {}): UserListRow[] {
@@ -14,7 +14,8 @@ export function listUsers(f: UserFilters = {}): UserListRow[] {
   if (f.status === "locked") where.push("(u.status = 'locked')");
   else if (f.status) { where.push("u.status = ?"); p.push(f.status); }
   return getDb().prepare(
-    `SELECT u.*, d.name AS department_name, r.name AS role_name, r.code AS role_code FROM users u
+    `SELECT u.*, d.name AS department_name, r.name AS role_name, r.code AS role_code,
+       (SELECT group_concat(e.flag || ' ' || e.short_name, ', ') FROM user_entities ue JOIN entities e ON e.id = ue.entity_id WHERE ue.user_id = u.id ORDER BY e.sort_order) AS entities FROM users u
      LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN roles r ON r.id = u.role_id
      ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY u.id`,
   ).all(...p) as UserListRow[];
@@ -55,6 +56,15 @@ export function lookups() {
     departments: db.prepare("SELECT id, name FROM departments ORDER BY name").all() as { id: number; name: string }[],
     roles: db.prepare("SELECT id, code, name FROM roles ORDER BY is_system DESC, id").all() as { id: number; code: string; name: string }[],
     users: db.prepare("SELECT id, name FROM users WHERE status != 'disabled' ORDER BY name").all() as { id: number; name: string }[],
+    entities: db.prepare("SELECT id, code, country, flag, short_name, currency FROM entities WHERE status = 'active' ORDER BY sort_order, id").all() as { id: number; code: string; country: string; flag: string | null; short_name: string; currency: string }[],
+  };
+}
+/** Countries a user may access (rows of user_entities) + the default country. */
+export function userEntityAccess(userId: number): { ids: number[]; defaultId: number | null } {
+  const db = getDb();
+  return {
+    ids: (db.prepare("SELECT entity_id FROM user_entities WHERE user_id = ? ORDER BY entity_id").all(userId) as { entity_id: number }[]).map((r) => r.entity_id),
+    defaultId: (db.prepare("SELECT default_entity_id d FROM users WHERE id = ?").get(userId) as { d: number | null } | undefined)?.d ?? null,
   };
 }
 

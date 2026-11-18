@@ -15,6 +15,9 @@ import { deleteClient } from "@/features/clients/actions";
 import { can, isAdminUser, requirePage } from "@/lib/auth";
 import ClientPortalTab from "@/features/client-portal-admin/components/ClientPortalTab";
 import ActionForm from "@/components/ActionForm";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
 
 export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const me = await requirePage("clients");
@@ -22,11 +25,13 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
   const id = Number(s);
   const c = Number.isInteger(id) ? getClient(id) : undefined;
   if (!c) notFound();
+  const rec = await assertRecordAccess(c.entity_id);
   const tenders = clientTenders(id); const projects = clientProjects(id);
   const tabs = [{ key: "overview", label: "Overview" }, ...(can(me, "clients", "portal") ? [{ key: "portal", label: "Portal access" }] : [])];
   const tab = resolveTab(await searchParams, tabs);
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="client" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader title={c.name} breadcrumbs={[{ label: "Clients", href: "/clients" }, { label: c.name }]} badges={<StatusBadge kind="clientType" value={c.type} />}
         actions={<>
           {can(me, "clients", "edit") && <ModalButton label="Edit" title="Edit client" wide><ClientForm client={c} /></ModalButton>}
@@ -67,6 +72,6 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
         </CardSection>
       </div>
       </>}
-    </>
+    </CurrencyProvider>
   );
 }

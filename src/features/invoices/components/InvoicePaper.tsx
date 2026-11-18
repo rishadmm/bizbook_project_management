@@ -1,4 +1,4 @@
-import { formatDate, formatDateTime, formatMoney } from "@/lib/format";
+import { currencyDecimals, formatDate, formatDateTime, formatMoney, usdEquivalent } from "@/lib/format";
 import { statusLabel } from "@/lib/status";
 import { fromGross } from "../calc";
 import type { InvoiceDetail } from "../queries";
@@ -16,11 +16,12 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export function InvoicePaper({ d }: { d: InvoiceDetail }) {
   const { invoice: i, subcontractor: s, company, project, assignment: a, lines } = d;
   const cur = i.currency || "AED";
-  const m = (v: number) => formatMoney(v, { decimals: 2, currency: cur });
-  const money = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const m = (v: number) => formatMoney(v, { decimals: currencyDecimals(cur), currency: cur });
+  const dec = currencyDecimals(cur);
+  const money = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const certGross = d.certifiedState ? i.certified_amount : 0;
   const cert = fromGross(certGross, i.vat_rate);
-  const paper = "print-paper mx-auto w-full max-w-[860px] rounded-2xl border border-line bg-white p-6 shadow-card sm:p-10";
+  const paper = "@container print-paper mx-auto w-full max-w-[860px] rounded-2xl border border-line bg-white p-6 shadow-card sm:p-10";
   return (
     <article className={paper} data-testid="invoice-paper">
       {/* letterhead */}
@@ -29,7 +30,7 @@ export function InvoicePaper({ d }: { d: InvoiceDetail }) {
           <div className="text-xl font-extrabold tracking-tight text-dark">{s.name}</div>
           <div className="mt-1 text-[12px] leading-5 text-slate-500">
             {s.address && <div>{s.address}</div>}
-            <div>{s.tax_no ? `TRN ${s.tax_no}` : "TRN not on file"}{s.trade_license_no ? ` · Trade licence ${s.trade_license_no}` : ""}</div>
+            <div>{s.tax_no ? `${company.tax_label} ${s.tax_no}` : `${company.tax_label} not on file`}{s.trade_license_no ? ` · Trade licence ${s.trade_license_no}` : ""}</div>
             <div>{[s.contact_person, s.phone, s.email].filter(Boolean).join(" · ")}</div>
           </div>
         </div>
@@ -40,7 +41,7 @@ export function InvoicePaper({ d }: { d: InvoiceDetail }) {
       </header>
 
       {/* meta + bill to */}
-      <section className="mt-5 grid gap-5 sm:grid-cols-2">
+      <section className="mt-5 grid gap-5 @xl:grid-cols-2 print:grid-cols-2">
         <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1 text-[13px]">
           <dt className="text-slate-400">Invoice no.</dt><dd className="font-semibold text-dark">{i.invoice_no ?? `#${i.id}`}</dd>
           <dt className="text-slate-400">Supplier ref.</dt><dd className="font-semibold">{i.sub_invoice_ref ?? "—"}</dd>
@@ -52,11 +53,11 @@ export function InvoicePaper({ d }: { d: InvoiceDetail }) {
         <Block title="Bill to">
           <div className="font-bold text-dark">{company.name}</div>
           {company.address && <div>{company.address}</div>}
-          {company.trn && <div>TRN {company.trn}</div>}
+          {company.trn && <div>{company.tax_label} {company.trn}</div>}
         </Block>
       </section>
 
-      <section className="mt-4 grid gap-3 rounded-xl bg-[#f8fafc] p-3 text-[13px] sm:grid-cols-2">
+      <section className="mt-4 grid gap-3 rounded-xl bg-[#f8fafc] p-3 text-[13px] @xl:grid-cols-2 print:grid-cols-2">
         <div><span className="text-slate-400">Project </span><b className="text-dark">{project.code}</b> · {project.name}</div>
         <div><span className="text-slate-400">Subcontract </span><b className="text-dark">{a.code ?? "—"}</b> · contract value {m(a.contract_value)}</div>
         <div><span className="text-slate-400">Stage </span>{d.stages.length ? d.stages.map((x) => `${x.code ?? ""} ${x.name}`.trim()).join(", ") : "—"}</div>
@@ -89,6 +90,7 @@ export function InvoicePaper({ d }: { d: InvoiceDetail }) {
           <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span className="tabular-nums" data-testid="inv-subtotal">{m(i.subtotal)}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">VAT {i.vat_rate}%</span><span className="tabular-nums">{m(i.vat_amount)}</span></div>
           <div className="flex justify-between border-t border-slate-300 pt-1 text-[14px] font-extrabold text-dark"><span>Total claimed (gross)</span><span className="tabular-nums" data-testid="inv-gross">{m(i.claimed_amount)}</span></div>
+          {usdEquivalent(i.claimed_amount_usd, i.fx_rate_usd, i.fx_date) && <div className="text-right text-[11px] text-slate-400" data-testid="inv-usd">{usdEquivalent(i.claimed_amount_usd, i.fx_rate_usd, i.fx_date)}</div>}
         </div>
       </section>
 
@@ -127,6 +129,7 @@ export function InvoicePaper({ d }: { d: InvoiceDetail }) {
               <div className="flex justify-between text-slate-600"><span>Less retention ({i.retention_percent || a.retention_pct}%)</span><span className="tabular-nums">− {m(i.retention_amount)}</span></div>
               <div className="flex justify-between text-slate-600"><span>Less advance recovery ({i.advance_recovery_percent || a.advance_pct}%)</span><span className="tabular-nums">− {m(i.advance_recovery)}</span></div>
               <div className="flex justify-between rounded-lg bg-primary-50 px-2 py-1.5 text-[15px] font-extrabold text-primary-dark"><span>Net payable</span><span className="tabular-nums" data-testid="inv-net">{m(i.net_payable)}</span></div>
+              {usdEquivalent(i.net_payable_usd, i.fx_rate_usd, i.fx_date) && <div className="text-right text-[11px] text-slate-400" data-testid="inv-net-usd">{usdEquivalent(i.net_payable_usd, i.fx_rate_usd, i.fx_date)}</div>}
             </div>
             <p className="mt-3 text-[12px] italic text-slate-600">{amountInWords(i.net_payable, cur)}</p>
           </>

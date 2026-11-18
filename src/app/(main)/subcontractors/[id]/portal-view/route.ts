@@ -19,7 +19,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!isAdminUser(me) || !can(me, "subcontractors", "portal")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const id = Number((await ctx.params).id);
   const sub = Number.isInteger(id) ? (getDb().prepare("SELECT * FROM subcontractors WHERE id = ?").get(id) as Subcontractor | undefined) : undefined;
-  if (!sub) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!sub || !me.entityIds.includes(sub.entity_id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (!portalAvailable(sub)) return NextResponse.json({ error: "The portal is disabled for this subcontractor." }, { status: 409 });
   const slug = ensureSlug(getDb(), sub.id)!;
   await startPortalSession({ userId: null, subId: sub.id, remember: false, impersonatedBy: me.id });

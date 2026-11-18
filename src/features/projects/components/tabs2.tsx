@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ExternalLink, Pencil, Plus, Trash2, Check, X } from "lucide-react";
+import { ExternalLink, Gavel, Pencil, Plus, Trash2, Check, X } from "lucide-react";
+import { buttonClass } from "@/components/ui/Button";
 import { Badge, Button, CardSection, EmptyState, ModalButton, ProgressBar, Select, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 import { can, type AuthUser } from "@/lib/auth";
@@ -21,23 +22,27 @@ import { barTone } from "./tabs1";
 
 const stageOpts = (stages: StageRowEx[]) => stages.map((s) => ({ value: s.id, label: `${s.code ?? ""} ${s.name}`.trim() }));
 
+const rfxCode = (id: number) => (getDb().prepare("SELECT code FROM rfx_tenders WHERE id = ?").get(id) as { code: string } | undefined)?.code ?? `#${id}`;
+
 /* ------------------------------------------------------------------ Subcontracts */
 
 export function SubcontractsTab({ project, stages, me }: { project: ProjectRow; stages: StageRowEx[]; me: AuthUser }) {
   const rows = getAssignments(project.id);
-  const subs = listSubcontractors().map((s) => ({ value: s.id, label: `${s.name}${s.trade ? ` (${s.trade})` : ""}${s.status !== "approved" ? ` – ${s.status}` : ""}` }));
+  const subs = listSubcontractors(project.entity_id).map((s) => ({ value: s.id, label: `${s.name}${s.trade ? ` (${s.trade})` : ""}${s.status !== "approved" ? ` – ${s.status}` : ""}` }));
   const so = stageOpts(stages);
   const total = rows.reduce((a, r) => a + r.contract_value, 0);
   return (
     <CardSection title="Subcontracts" subtitle={`${rows.length} assignments · ${formatMoney(total, { compact: true })} committed`} flush
-      actions={<ModalButton label="New subcontract" title="New subcontract" variant="primary" size="sm" wide icon={<Plus size={14} className="mr-1" />}><AssignmentForm projectId={project.id} stages={so} subs={subs} /></ModalButton>}>
+      actions={<>
+        <ModalButton label="Assign directly" title="New subcontract (direct assignment)" variant="primary" size="sm" wide icon={<Plus size={14} className="mr-1" />}><AssignmentForm projectId={project.id} stages={so} subs={subs} /></ModalButton>
+        {can(me, "procurement", "create") && <Link href={`/procurement/new?project=${project.id}`} data-testid="float-tender" className={buttonClass("primary", "sm")}><Gavel size={14} />Float a tender</Link>}</>}>
       {rows.length === 0 ? <div className="p-4"><EmptyState title="No subcontracts" description="Assign a subcontractor to a stage to start tracking work, invoices and portal submissions." /></div> : (
         <Table>
           <THead><TR><TH>Code</TH><TH>Subcontractor</TH><TH>Stage / scope</TH><TH num>Value</TH><TH>Dates</TH><TH>Terms</TH><TH className="w-40">Progress</TH><TH num>Certified / Paid</TH><TH>Status</TH><TH>Portal</TH><TH className="w-20" /></TR></THead>
           <TBody>
             {rows.map((a) => (
               <TR key={a.id}>
-                <TD className="font-medium">{a.code}</TD>
+                <TD className="whitespace-nowrap font-medium">{a.code}<div className="whitespace-nowrap text-xs font-normal" data-testid="asg-source">{a.source === "tender" && a.rfx_id ? <Link href={`/procurement/${a.rfx_id}`} className="font-semibold text-indigo-700 hover:underline">Tender {rfxCode(a.rfx_id)}</Link> : <span className="text-slate-400">Direct</span>}</div></TD>
                 <TD><Link href={`/subcontractors/${a.subcontractor_id}`} className="text-blue-700 hover:underline">{a.subcontractor_name}</Link></TD>
                 <TD className="max-w-[240px]"><div className="text-xs font-medium text-slate-700">{a.stage_code ?? "Whole project"}</div><div className="truncate text-xs text-slate-500" title={a.scope ?? ""}>{a.scope ?? "—"}</div></TD>
                 <TD num>{formatMoney(a.contract_value, { compact: true })}<div className="text-xs text-slate-400">{a.quantity ? `${formatNumber(a.quantity, 2)} ${a.quantity_unit ?? ""}` : ""}</div></TD>

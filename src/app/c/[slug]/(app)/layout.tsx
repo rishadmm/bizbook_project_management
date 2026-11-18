@@ -1,4 +1,5 @@
-import { getSetting } from "@/lib/db";
+import MapCenterInit from "@/components/map/MapCenterInit";
+import CurrencyProvider from "@/components/CurrencyProvider";
 import { requireClientUser } from "@/lib/client-portal-auth";
 import { clientRoleLabel } from "@/lib/client-portal-core";
 import ClientShell, { type NavEntry } from "@/features/client-portal/components/ClientShell";
@@ -21,9 +22,10 @@ export default async function ClientAppLayout({ children, params }: { children: 
   const s = await requireClientUser(slug);
   const nav: NavEntry[] = NAV.filter((n) => !n.adminOnly || s.user.role === "admin").map((n) => ({ key: n.key, label: n.label, href: `/c/${slug}${n.path}` }));
   return (
-    <ClientShell slug={slug} clientName={s.client.name} tenant={getSetting("company_name", "Al Noor Infrastructure LLC")} user={{ name: s.user.name, role: clientRoleLabel(s.user.role), email: s.user.email }}
+    <ClientShell slug={slug} clientName={s.client.name} tenant={s.entity.legal_name} user={{ name: s.user.name, role: clientRoleLabel(s.user.role), email: s.user.email }}
       nav={nav} adminView={s.impersonator ? s.impersonator.name : null}>
-      {children}
+      <MapCenterInit value={s.entity.map_center ?? ""} />
+      <CurrencyProvider currency={s.entity.currency}>{children}</CurrencyProvider>
     </ClientShell>
   );
 }

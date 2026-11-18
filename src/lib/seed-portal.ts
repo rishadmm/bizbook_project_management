@@ -8,24 +8,16 @@ import { nanoid } from "nanoid";
 import type { DB } from "./db";
 import { addDays } from "./format";
 import { DEMO_PORTAL_PASSWORD, insertPortalUser, uniqueSlug } from "./portal-core";
+import { getRegionProfile } from "./seed-regions";
 
-interface Ctx { today: string; uploads: string; admin: number; clerk: number }
-interface PUser { name: string; role: "owner" | "manager" | "site" | "accounts" | "viewer"; title: string; state?: "must_change" | "locked" | "disabled" }
-
-const TEAMS: Record<number, PUser[]> = {
-  1: [{ name: "", role: "owner", title: "Managing Director" }, { name: "Yousef Haddad", role: "site", title: "Site Engineer" }, { name: "Priya Menon", role: "accounts", title: "Accountant" }],
-  2: [{ name: "", role: "owner", title: "General Manager" }, { name: "Fatima Al Mansoori", role: "manager", title: "Contracts Manager" }, { name: "Khalid Rahman", role: "site", title: "Site Engineer" }, { name: "Sunil Varghese", role: "accounts", title: "Accountant" }],
-  3: [{ name: "", role: "owner", title: "Operations Director" }, { name: "Idris Qadri", role: "site", title: "Site Engineer" }, { name: "Neha Kapoor", role: "accounts", title: "Accountant" }],
-  4: [{ name: "", role: "owner", title: "Managing Partner" }, { name: "Walid Nasser", role: "site", title: "Project Engineer" }, { name: "Reem Al Suwaidi", role: "accounts", title: "Finance Officer", state: "must_change" }],
-  5: [{ name: "", role: "owner", title: "Managing Director" }, { name: "Tarek Mansour", role: "site", title: "Site Engineer" }, { name: "Joseph Dsouza", role: "accounts", title: "Accountant", state: "locked" }],
-  6: [{ name: "", role: "owner", title: "Director" }, { name: "Faisal Anwar", role: "site", title: "Site Engineer", state: "disabled" }, { name: "Meera Pillai", role: "accounts", title: "Accountant" }],
-  7: [{ name: "", role: "owner", title: "Chief Surveyor" }, { name: "Omar Khoury", role: "site", title: "Site Engineer" }, { name: "Lina Haddad", role: "accounts", title: "Accountant" }, { name: "Basel Iqbal", role: "viewer", title: "Quality Observer" }],
-};
+interface Ctx { today: string; uploads: string; admin: number; clerk: number; /** only this country's subcontractors are seeded */ entityId: number }
 const SVG = (label: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420"><rect width="640" height="420" fill="#e2e8f0"/><rect y="250" width="640" height="170" fill="#94a3b8"/><rect x="40" y="220" width="560" height="26" fill="#475569"/><circle cx="520" cy="80" r="38" fill="#fbbf24"/><text x="24" y="44" font-family="sans-serif" font-size="22" fill="#0f172a">${label}</text></svg>`;
 
 export interface PortalSeedResult { slugs: { sub: string; slug: string; owner: string | null; enabled: boolean }[] }
 
 export function seedPortal(db: DB, c: Ctx): PortalSeedResult {
+  const P = getRegionProfile().portal;
+  const TEAMS = P.teams;
   const iso = (daysAgo: number, hh = 8, mm = 0) => { const d = new Date(Date.now() - daysAgo * 86_400_000); d.setUTCHours(hh, mm, 0, 0); return d.toISOString(); };
   const one = <T = any>(sql: string, ...a: unknown[]) => db.prepare(sql).get(...(a as any[])) as T | undefined;
   const all = <T = any>(sql: string, ...a: unknown[]) => db.prepare(sql).all(...(a as any[])) as T[];
@@ -40,22 +32,24 @@ export function seedPortal(db: DB, c: Ctx): PortalSeedResult {
       .run(subId, userId, email, event, ip, "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36", detail, iso(daysAgo, hh, mm));
 
   // 1. slugs for every subcontractor (approved ones are enabled below)
-  for (const s of all<{ id: number; name: string }>("SELECT id, name FROM subcontractors ORDER BY id")) db.prepare("UPDATE subcontractors SET portal_slug = ? WHERE id = ?").run(uniqueSlug(db, s.name, s.id), s.id);
+  // 1-based position of each subcontractor within its country: the profile's portal teams / phones are keyed by it (equals the id in the first region)
+  const subPos = new Map(all<{ id: number }>("SELECT id FROM subcontractors WHERE entity_id = ? ORDER BY id", c.entityId).map((r, i) => [r.id, i + 1]));
+  for (const s of all<{ id: number; name: string }>("SELECT id, name FROM subcontractors WHERE entity_id = ? ORDER BY id", c.entityId)) db.prepare("UPDATE subcontractors SET portal_slug = ? WHERE id = ?").run(uniqueSlug(db, s.name, s.id), s.id);
 
   const adminName = one<{ name: string }>("SELECT name FROM users WHERE id = ?", c.admin)?.name ?? "Administrator";
   const emails = new Map<number, { owner: string; site?: string; accounts?: string }>();
   const userIds = new Map<string, number>(); // `${subId}:${role}` -> id of the first user with that role
-  const subs = all<{ id: number; name: string; email: string; contact_person: string }>("SELECT id, name, email, contact_person FROM subcontractors WHERE status = 'approved' ORDER BY id");
+  const subs = all<{ id: number; name: string; email: string; contact_person: string }>("SELECT id, name, email, contact_person FROM subcontractors WHERE entity_id = ? AND status = 'approved' ORDER BY id", c.entityId);
   subs.forEach((s, idx) => {
     db.prepare("UPDATE subcontractors SET portal_enabled = 1 WHERE id = ?").run(s.id);
-    const team = TEAMS[s.id] ?? TEAMS[(idx % 7) + 1];
-    const domain = s.email.split("@")[1] ?? "demo.ae";
+    const team = TEAMS[subPos.get(s.id)!] ?? TEAMS[(idx % 7) + 1];
+    const domain = s.email.split("@")[1] ?? P.defaultDomain;
     team.forEach((u, k) => {
       const name = u.name || s.contact_person;
       const local = name.toLowerCase().replace(/[^a-z\s]/g, "").trim().split(/\s+/).filter((w, i, a) => i === 0 || i === a.length - 1).join(".");
       const email = `${local}@${domain}`;
       const created = iso(60 - k * 3 - idx);
-      const id = insertPortalUser(db, { subcontractorId: s.id, name, email, jobTitle: u.title, phone: `+971 55 ${String(2000000 + s.id * 11111 + k * 137).slice(0, 3)} ${String(4000 + s.id * 97 + k * 13).padStart(4, "0")}`, role: u.role, password: DEMO_PORTAL_PASSWORD,
+      const id = insertPortalUser(db, { subcontractorId: s.id, name, email, jobTitle: u.title, phone: P.phone(subPos.get(s.id)!, k), role: u.role, password: DEMO_PORTAL_PASSWORD,
         mustChange: u.state === "must_change", createdBy: c.admin, createdAt: created, status: u.state === "disabled" ? "disabled" : "active" });
       userIds.set(`${s.id}:${u.role}`, userIds.get(`${s.id}:${u.role}`) ?? id);
       if (u.role === "owner") emails.set(s.id, { ...(emails.get(s.id) ?? { owner: email }), owner: email });
@@ -125,16 +119,7 @@ export function seedPortal(db: DB, c: Ctx): PortalSeedResult {
     if (kind === "issue") file("issue", id, "Portal", `issue-photo-${id}.svg`, SVG(title.slice(0, 40)), "image/svg+xml", u.name, raised);
     db.prepare("INSERT INTO activity_log(entity_type, entity_id, action, message, user_id, created_at) VALUES ('project',?,?,?,NULL,?)").run(a.project_id, "issue", `${kind === "rfi" ? "RFI" : "Issue"} "${title}" raised via portal by ${u.name} (${a.code})`, iso(raised, 8, 20).replace("T", " ").slice(0, 19));
   };
-  issue(2, "rfi", "Clarification: trench backfill specification at CH 12+400", "The drawing note says 'approved granular backfill' but the spec calls for CLSM within 3 m of the road crossing. Which applies to this section?", "Design / drawings", "company", 4, "open", "internal",
-    [[true, "Can you confirm which backfill applies between CH 12+350 and 12+450? We start backfilling on Sunday.", 4]]);
-  issue(0, "issue", "Zone B access gate locked during the morning shift", "Our crew was held at the gate for ~40 minutes on three mornings this week. We need a keyholder before 06:30.", "Site access", "company", 6, "open", "portal",
-    [[true, "The gate at Zone B was locked again today until 07:10. Crew of 14 waited.", 6], [false, "Understood. We have asked the client's security to leave it open from 06:00. Please send photos with the times you were blocked so we can record the delay.", 5]]);
-  issue(1, "issue", "Asphalt mix trial approval pending with the authority", "Mix trial results were submitted 9 days ago. Paving cannot start until the authority approves the job mix formula.", "Permits / authority", "authority", 12, "mitigating", "internal",
-    [[true, "Trial results were submitted on the 2nd. No feedback yet; paving crew is on standby.", 12], [false, "We chased the authority on Tuesday; their lab review is scheduled this week.", 9], [true, "Thank you. Please confirm the date so we can remobilise the paver.", 7]]);
-  issue(3, "rfi", "Duct bank crossing detail at the metro culvert", "Please issue the crossing detail drawing for the duct bank at the culvert (chainage 5+120).", "Design / drawings", "client", 20, "closed", null,
-    [[true, "Requesting the crossing detail for CH 5+120.", 20], [false, "Drawing CR-114 rev B issued today; see Documents > Shared with you.", 17], [true, "Received, thanks.", 16]]);
-  issue(6, "issue", "Survey control point CP-07 disturbed by traffic", "CP-07 was knocked by a vehicle. Setting-out for the next 600 m depends on a re-established control point.", "Site access", "other", 3, "open", "portal",
-    [[true, "CP-07 is displaced by roughly 8 cm. We stopped setting-out in the section.", 3], [false, "Thanks for flagging. Our surveyor will re-establish it tomorrow; please confirm in the thread if access to CP-07 is clear.", 2]]);
+  for (const x of P.issues) issue(x.sub, x.kind, x.title, x.desc, x.category, x.resp, x.raised, x.status, x.awaiting, x.thread);
 
   // 4. documents uploaded through the portal waiting for review
   const doc = (subIdx: number, type: string, ref: string, issued: number, expiry: number, daysAgo: number) => {
@@ -152,12 +137,12 @@ export function seedPortal(db: DB, c: Ctx): PortalSeedResult {
   // 5. change requests: one pending bank change, one decided contact change
   const falcon = subs[3], desert = subs[0];
   if (falcon) db.prepare("INSERT INTO portal_change_requests(subcontractor_id, requested_by, requested_by_name, kind, payload, reason, status, created_at) VALUES (?,?,?,?,?,?, 'pending', ?)")
-    .run(falcon.id, userIds.get(`${falcon.id}:owner`) ?? null, falcon.contact_person, "bank", JSON.stringify({ bank_name: "Mashreq Bank", iban: "AE380330000010698641001" }), "We moved our operating account to Mashreq. Please pay future invoices there.", iso(1, 9, 30));
+    .run(falcon.id, userIds.get(`${falcon.id}:owner`) ?? null, falcon.contact_person, "bank", JSON.stringify({ bank_name: P.bankChange.bank_name, iban: P.bankChange.iban }), P.bankChange.reason, iso(1, 9, 30));
   if (desert) db.prepare("INSERT INTO portal_change_requests(subcontractor_id, requested_by, requested_by_name, kind, payload, reason, status, decided_by, decided_at, decision_note, created_at) VALUES (?,?,?,?,?,?, 'approved', ?,?,?,?)")
-    .run(desert.id, userIds.get(`${desert.id}:owner`) ?? null, desert.contact_person, "contact", JSON.stringify({ phone: "+971 4 555 0142" }), "New office landline.", c.clerk, iso(14, 13), "Verified by phone.", iso(15, 9));
+    .run(desert.id, userIds.get(`${desert.id}:owner`) ?? null, desert.contact_person, "contact", JSON.stringify({ phone: P.contactChange.phone }), P.contactChange.reason, c.clerk, iso(14, 13), "Verified by phone.", iso(15, 9));
 
   return {
-    slugs: all<{ id: number; name: string; portal_slug: string; portal_enabled: number }>("SELECT id, name, portal_slug, portal_enabled FROM subcontractors ORDER BY id")
+    slugs: all<{ id: number; name: string; portal_slug: string; portal_enabled: number }>("SELECT id, name, portal_slug, portal_enabled FROM subcontractors WHERE entity_id = ? ORDER BY id", c.entityId)
       .map((s) => ({ sub: s.name, slug: s.portal_slug, owner: emails.get(s.id)?.owner ?? null, enabled: !!s.portal_enabled })),
   };
 }

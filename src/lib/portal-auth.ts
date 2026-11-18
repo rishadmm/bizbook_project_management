@@ -6,8 +6,12 @@ import { redirect } from "next/navigation";
 import { getDb } from "./db";
 import { hashToken, newToken, nowIso, parseDbDate, requestMeta } from "./auth";
 import { burnPasswordCheck, verifyPassword } from "./password";
-import { isPortalRole, parseScope, portalCan, type PortalPerm, type PortalRole } from "./portal-core";
+import { isPortalRole, isRestrictedAllowed, parseScope, portalCan, type PortalPerm, type PortalRole } from "./portal-core";
 import type { Attachment, Subcontractor } from "./types";
+import { getEntityById, type Entity } from "./entities";
+import { setRequestCurrency } from "./request-context";
+import { PORTAL_VISIBLE_STATUSES } from "./rfx";
+import { getRfx, isEligibleToView } from "../features/procurement/rfx-core";
 
 export const PORTAL_COOKIE = "bbp_portal";
 export const PORTAL_SESSION_HOURS = 12;
@@ -23,7 +27,7 @@ export interface PortalSessionUser {
   scope: number[] | null; lastLoginAt: string | null; previousLoginAt: string | null;
 }
 export interface PortalSession {
-  sessionId: number; user: PortalSessionUser; sub: Subcontractor; readOnly: boolean; impersonator: { id: number; name: string } | null;
+  sessionId: number; user: PortalSessionUser; sub: Subcontractor; /** the subcontractor's country: tenant legal name, currency, tax label, map centre */ entity: Entity; readOnly: boolean; impersonator: { id: number; name: string } | null;
 }
 
 export type PortalEvent = "login_success" | "login_failed" | "locked" | "logout" | "password_changed" | "password_reset" | "user_created" | "user_disabled" | "user_enabled"
@@ -66,7 +70,10 @@ export const getPortalSession = cache(async (): Promise<PortalSession | null> =>
       lastLoginAt: u.last_login_at, previousLoginAt: u.previous_login_at };
   }
   if (!s.last_seen_at || Date.now() - parseDbDate(s.last_seen_at) > 60_000) db.prepare("UPDATE portal_sessions SET last_seen_at = ? WHERE id = ?").run(nowIso(), s.id);
-  return { sessionId: s.id, user, sub, readOnly: !!impersonator, impersonator };
+  const entity = getEntityById(sub.entity_id);
+  if (!entity) return null;
+  setRequestCurrency(entity.currency); // formatMoney default of this portal request = the subcontractor's country currency
+  return { sessionId: s.id, user, sub, entity, readOnly: !!impersonator, impersonator };
 });
 
 /**
@@ -79,8 +86,13 @@ export async function requirePortalUser(slug: string, perm?: PortalPerm, opts: {
   if (s.sub.portal_slug !== slug) redirect(`/p/${encodeURIComponent(s.sub.portal_slug ?? "")}`);
   if (s.user.mustChange && !opts.allowMustChange) redirect(`/p/${slug}/change-password`);
   if (perm && !portalCan(s.user.role, perm)) redirect(`/p/${slug}/forbidden`);
+  // Restricted portal: a supplier whose registration is not approved only reaches Dashboard, Registration, Documents and Account (SUPPLIER_TENDERING_SPEC A4).
+  if (isRestricted(s.sub) && !isRestrictedAllowed(perm)) redirect(`/p/${slug}/forbidden?restricted=1`);
   return s;
 }
+
+/** True while the supplier's registration is not approved (restricted portal). Legacy rows without the column count as approved. */
+export const isRestricted = (sub: Pick<Subcontractor, "registration_status">): boolean => !!sub.registration_status && sub.registration_status !== "approved";
 
 /** Server-action / route guard: throws PortalError. Mutations (`write`, default) are refused in the read-only admin view. */
 export async function requirePortalAction(perm: PortalPerm | null, opts: { write?: boolean } = {}): Promise<PortalSession> {
@@ -89,6 +101,7 @@ export async function requirePortalAction(perm: PortalPerm | null, opts: { write
   if (s.user.mustChange) throw new PortalError("You must change your password before continuing.");
   if ((opts.write ?? true) && s.readOnly) throw new PortalError("Read-only view: actions are disabled while viewing the portal as an administrator.");
   if (perm && !portalCan(s.user.role, perm)) throw new PortalError("You do not have permission to do this.");
+  if (isRestricted(s.sub) && !isRestrictedAllowed(perm)) throw new PortalError("This is available after your registration has been approved.");
   return s;
 }
 
@@ -108,6 +121,8 @@ export function canSeeAssignment(s: PortalSession, assignmentId: number | null |
 /** True when the attachment belongs to this company (its assignments' progress reports, invoices, certificates, issues, own documents, shared drawings). */
 export function portalOwnsAttachment(s: PortalSession, a: Attachment): boolean {
   if (s.user.mustChange) return false;
+  // a supplier that is not approved only ever gets its own registration documents
+  if (isRestricted(s.sub) && a.entity_type !== "subcontractor") return false;
   const db = getDb();
   const own = (asg: number | null | undefined) => canSeeAssignment(s, asg);
   const col = (sql: string) => (db.prepare(sql).get(a.entity_id) as { a: number | null } | undefined)?.a ?? null;
@@ -123,6 +138,13 @@ export function portalOwnsAttachment(s: PortalSession, a: Attachment): boolean {
     case "invoice": case "sub_invoice": return portalCan(s.user.role, "invoices") && own(col("SELECT assignment_id a FROM sub_invoices WHERE id = ?"));
     case "certificate": return portalCan(s.user.role, "certificates") && own(col("SELECT assignment_id a FROM completion_certificates WHERE id = ?"));
     case "issue": return portalCan(s.user.role, "issues") && own(col("SELECT assignment_id a FROM issues WHERE id = ?"));
+    // supplier tendering: tender documents / addenda go to eligible suppliers once the tender is published; a bid file only to the company that owns the bid (sealed-bid rule: never to a competitor)
+    case "rfx": {
+      if (!portalCan(s.user.role, "tenders")) return false;
+      const rfx = getRfx(db, a.entity_id);
+      return !!rfx && rfx.entity_id === s.sub.entity_id && PORTAL_VISIBLE_STATUSES.includes(rfx.status as never) && isEligibleToView(db, rfx, s.sub.id);
+    }
+    case "rfx_bid": return portalCan(s.user.role, "tenders") && (db.prepare("SELECT 1 FROM rfx_bids WHERE id = ? AND subcontractor_id = ?").get(a.entity_id, s.sub.id) !== undefined);
     default: return false;
   }
 }

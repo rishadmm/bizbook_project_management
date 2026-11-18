@@ -7,6 +7,8 @@ import { getPortalSession, portalOwnsAttachment } from "@/lib/portal-auth";
 import { clientOwnsAttachment, getClientSession } from "@/lib/client-portal-auth";
 import { resolvePortal } from "@/features/portal/queries";
 import { UPLOAD_DIR } from "@/lib/files";
+import { entityOfAttachmentOwner } from "@/lib/entities";
+import { internalMayReadBidFile } from "@/features/procurement/bid-core";
 import type { Attachment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +35,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const sp = new URL(req.url).searchParams;
   const session = await getSession();
   const portalToken = sp.get("portal");
+  // Internal users only get files of records in the countries they may access (the file of another country "does not exist").
+  const ownerEntity = entityOfAttachmentOwner(a.entity_type, a.entity_id);
   const internal = !!session && !session.user.must_change_password;
+  if (internal && (!ownerEntity || !session!.user.entityIds.includes(ownerEntity))) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // sealed-bid rule: internal users get bid files only once the relevant envelope is open
+  if (internal && a.entity_type === "rfx_bid" && !internalMayReadBidFile(getDb(), a)) return NextResponse.json({ error: "Forbidden: the bid is sealed until the opening" }, { status: 403 });
   let authorised = internal || (portalToken ? portalOwnsFile(portalToken, a) : false);
   if (!authorised) {
     // Separate portal login (bbp_portal): only files that belong to the signed-in company.

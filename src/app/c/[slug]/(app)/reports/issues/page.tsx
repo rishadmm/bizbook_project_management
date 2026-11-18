@@ -17,7 +17,7 @@ export default async function IssuesReportPage({ params, searchParams }: { param
   const qs = new URLSearchParams({ report: "issues", ...Object.fromEntries(Object.entries(sp).filter(([, x]) => x)) as Record<string, string> });
   const total = r.issues.reduce((t, i) => t + i.impactDays, 0);
   return (
-    <ReportFrame slug={slug} title="Issues & delays" subtitle={`${r.issues.length} issue${r.issues.length === 1 ? "" : "s"} · ${total} days of impact`} clientName={s.client.name} csvHref={`/c/${slug}/reports/export?${qs}`}
+    <ReportFrame slug={slug} title="Issues & delays" subtitle={`${r.issues.length} issue${r.issues.length === 1 ? "" : "s"} · ${total} days of impact`} clientName={s.client.name} tenant={s.entity.legal_name} csvHref={`/c/${slug}/reports/export?${qs}`}
       controls={<>
         <SelectParam name="project" label="Project" value={sp.project ?? ""} options={v.projects.map((p) => ({ value: String(p.id), label: p.code }))} all="All projects" />
         <SelectParam name="status" label="Status" value={r.filters.status ?? ""} options={[{ value: "open", label: "Open" }, { value: "closed", label: "Closed" }]} all="Any status" />

@@ -1,19 +1,20 @@
 import { getDb } from "@/lib/db";
+import { userInEntitySql } from "@/lib/entities";
 import type { LossAnalysis, User } from "@/lib/types";
 
 export type LossRow = LossAnalysis & {
-  tender_code: string; tender_title: string; tender_category: string; client_name: string | null; owner_name: string | null; decided_at: string | null;
+  tender_code: string; tender_title: string; tender_category: string; client_name: string | null; owner_name: string | null; decided_at: string | null; entity_id: number;
 };
-const SELECT = `SELECT l.*, t.code AS tender_code, t.title AS tender_title, t.category AS tender_category, t.decided_at, c.name AS client_name, u.name AS owner_name
+const SELECT = `SELECT l.*, t.code AS tender_code, t.title AS tender_title, t.category AS tender_category, t.decided_at, c.name AS client_name, u.name AS owner_name, t.entity_id
   FROM loss_analyses l JOIN tenders t ON t.id = l.tender_id LEFT JOIN clients c ON c.id = t.client_id LEFT JOIN users u ON u.id = l.owner_id`;
 
-export function listLosses(): LossRow[] {
-  return getDb().prepare(`${SELECT} ORDER BY t.decided_at DESC, l.id DESC`).all() as LossRow[];
+export function listLosses(entityId: number): LossRow[] {
+  return getDb().prepare(`${SELECT} WHERE t.entity_id = ? ORDER BY t.decided_at DESC, l.id DESC`).all(entityId) as LossRow[];
 }
 export function getLoss(id: number): LossRow | undefined {
   return getDb().prepare(`${SELECT} WHERE l.id = ?`).get(id) as LossRow | undefined;
 }
-export function allUsers(): User[] { return getDb().prepare("SELECT * FROM users ORDER BY name").all() as User[]; }
+export function allUsers(entityId: number): User[] { return getDb().prepare(`SELECT u.* FROM users u WHERE ${userInEntitySql("u")} ORDER BY u.name`).all(entityId) as User[]; }
 
 export interface LossStats {
   total: number; open: number; avgGap: number | null; priceLosses: number;

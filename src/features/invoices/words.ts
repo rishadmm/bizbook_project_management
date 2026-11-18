@@ -1,3 +1,5 @@
+import { currencyDecimals } from "@/lib/format";
+
 // Amount in words ("AED One Hundred Twenty-Three Thousand Four Hundred Fifty-Six and 50/100 Only").
 const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
 const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
@@ -17,9 +19,10 @@ export function integerInWords(n: number): string {
   if (n > 0) parts.push(below1000(n));
   return parts.join(" ");
 }
-/** "AED One Thousand Two Hundred and 05/100 Only". */
+/** "AED One Thousand Two Hundred and 05/100 Only"; 3-decimal currencies: "OMR One Thousand Two Hundred and 250/1000 Only". */
 export function amountInWords(amount: number, currency = "AED"): string {
-  const cents = Math.round(Math.abs(amount) * 100);
-  const whole = Math.floor(cents / 100), frac = cents % 100;
-  return `${currency} ${integerInWords(whole)}${frac ? ` and ${String(frac).padStart(2, "0")}/100` : ""} Only`;
+  const dec = currencyDecimals(currency), base = 10 ** dec;
+  const minor = Math.round(Math.abs(amount) * base);
+  const whole = Math.floor(minor / base), frac = minor % base;
+  return `${currency} ${integerInWords(whole)}${frac ? ` and ${String(frac).padStart(dec, "0")}/${base}` : ""} Only`;
 }

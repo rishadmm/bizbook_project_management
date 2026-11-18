@@ -10,9 +10,10 @@ import ActionForm from "@/components/ActionForm";
 
 function conditions(w: WorkflowRow): string {
   const c: string[] = [];
-  if (w.condition_min_amount !== null && w.condition_max_amount !== null) c.push(`${formatMoney(w.condition_min_amount, { compact: true })} to < ${formatMoney(w.condition_max_amount, { compact: true })}`);
-  else if (w.condition_min_amount !== null) c.push(`amount >= ${formatMoney(w.condition_min_amount, { compact: true })}`);
-  else if (w.condition_max_amount !== null) c.push(`amount < ${formatMoney(w.condition_max_amount, { compact: true })}`);
+  const money = (n: number) => formatMoney(n, { compact: true, currency: w.entity_currency ?? undefined });
+  if (w.condition_min_amount !== null && w.condition_max_amount !== null) c.push(`${money(w.condition_min_amount)} to < ${money(w.condition_max_amount)}`);
+  else if (w.condition_min_amount !== null) c.push(`amount >= ${money(w.condition_min_amount)}`);
+  else if (w.condition_max_amount !== null) c.push(`amount < ${money(w.condition_max_amount)}`);
   if (w.department_name) c.push(`department ${w.department_name}`);
   if (w.condition_project_category) c.push(`category ${w.condition_project_category}`);
   return c.length ? c.join(", ") : "Any document";
@@ -33,11 +34,12 @@ export default async function ApprovalWorkflowsPage() {
             <CardSection key={d.type} title={d.label} subtitle={rows.length ? `${rows.length} workflow${rows.length === 1 ? "" : "s"}` : "No workflow: documents of this type are approved automatically"} flush>
               {rows.length === 0 ? <div className="p-4"><EmptyState title="No workflow configured" /></div> : (
                 <Table>
-                  <THead><TR><TH>Name</TH><TH>Conditions</TH><TH num>Priority</TH><TH num>Levels</TH><TH num>Open</TH><TH>Active</TH><TH /></TR></THead>
+                  <THead><TR><TH>Name</TH><TH>Country</TH><TH>Conditions</TH><TH num>Priority</TH><TH num>Levels</TH><TH num>Open</TH><TH>Active</TH><TH /></TR></THead>
                   <TBody>
                     {rows.map((w) => (
                       <TR key={w.id} data-workflow={w.id}>
                         <TD><Link href={`/admin/approval-workflows/${w.id}`} className="font-medium text-blue-700 hover:underline">{w.name}</Link>{w.description && <div className="max-w-md truncate text-xs text-slate-500">{w.description}</div>}</TD>
+                        <TD className="whitespace-nowrap text-xs">{w.entity_short ? `${w.entity_flag} ${w.entity_short}` : "All"}</TD>
                         <TD className="text-xs">{conditions(w)}</TD>
                         <TD num>{w.priority}</TD><TD num>{w.level_count}</TD><TD num>{w.open_requests || "-"}</TD>
                         <TD>

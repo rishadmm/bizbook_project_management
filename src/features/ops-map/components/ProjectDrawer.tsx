@@ -2,6 +2,7 @@
 import { ExternalLink, X } from "lucide-react";
 import { Bar as RBar, BarChart, Cell, LabelList, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { formatMoney } from "@/lib/format";
+import { useCurrency } from "@/components/CurrencyProvider";
 import { RESP_COLOR, RESP_LABEL, STATUS_COLOR, STATUS_LABEL } from "../calc";
 import type { ClientMode, Derived, OpsIssue, OpsMapData, OpsProject, OpsSegment, Party, SegStatus } from "../types";
 import { Dot, RAG_COLOR, RagPill, Ring, Section, daysBetween, shortDate, slipColor, slipText } from "./bits";
@@ -91,6 +92,7 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
   project: OpsProject; data: OpsMapData; segs: OpsSegment[]; derived: Derived; parties: Party[]; highlight: string | null; onHighlight: (k: string | null) => void;
   colorOf: (s: OpsSegment) => string; selectedKey: string | null; onSelectSeg: (k: string) => void; onClose: () => void; bare?: boolean; onPickSub: (subId: number) => void; client?: ClientMode;
 }) {
+  const currency = useCurrency();
   const d = derived.proj.get(project.id)!;
   const rc = RAG_COLOR[d.rag];
   const hl = highlight ? new Set(parties.find((p) => p.key === highlight)?.segKeys ?? []) : null;
@@ -119,7 +121,7 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><span className="om-muted text-[11px] font-extrabold tracking-wide">{project.code}</span><RagPill rag={d.rag} /></div>
             <h2 className="mt-1 text-[17px] font-extrabold leading-tight">{project.name}</h2>
-            <div className="om-muted mt-0.5 text-[11.5px] font-semibold">{project.client ?? "—"}{project.managerName ? ` · PM ${project.managerName}` : ""}{!client && project.contractValue ? ` · ${formatMoney(project.contractValue, { compact: true })}` : ""}</div>
+            <div className="om-muted mt-0.5 text-[11.5px] font-semibold">{project.client ?? "—"}{project.managerName ? ` · PM ${project.managerName}` : ""}{!client && project.contractValue ? ` · ${formatMoney(project.contractValue, { compact: true, currency })}` : ""}</div>
           </div>
           {!bare && <button type="button" className="om-btn !h-8 !w-8 !px-0" onClick={onClose} aria-label="Close project panel"><X size={15} /></button>}
         </div>
@@ -181,7 +183,7 @@ export default function ProjectDrawer({ project, data, segs, derived, parties, h
             <div className="space-y-2">{issues.slice(0, 5).map((i) => (
               <div key={i.id} className="flex items-start gap-2">
                 <span className="om-chip mt-0.5 shrink-0" style={{ background: `${RESP_COLOR[i.resp]}22`, color: RESP_COLOR[i.resp] }}>{RESP_LABEL[i.resp]}</span>
-                <div className="min-w-0 flex-1 text-[12px] font-bold leading-snug">{i.title}<div className="om-muted text-[10.5px] font-semibold">Raised {shortDate(i.raisedOn)}{i.impactDays ? ` · ${i.impactDays} d impact` : ""}{!client && i.impactCost ? ` · ${formatMoney(i.impactCost, { compact: true })}` : ""}</div></div>
+                <div className="min-w-0 flex-1 text-[12px] font-bold leading-snug">{i.title}<div className="om-muted text-[10.5px] font-semibold">Raised {shortDate(i.raisedOn)}{i.impactDays ? ` · ${i.impactDays} d impact` : ""}{!client && i.impactCost ? ` · ${formatMoney(i.impactCost, { compact: true, currency })}` : ""}</div></div>
               </div>
             ))}</div>
           )}

@@ -10,7 +10,7 @@ export default function ApprovalSettingsForm({ threshold, currency, types, canEd
   const [state, action, pending] = useActionState<ActionState, FormData>(saveApprovalSettings, null);
   return (
     <form action={action} className="space-y-4">
-      <Field label={`Project cost approval threshold (${currency})`} hint="Manual project costs at or above this amount are routed through the approval workflow." className="max-w-sm">
+      <Field label={`Project cost approval threshold (${currency})`} hint="For the active country. Manual project costs above this amount are routed through the approval workflow." className="max-w-sm">
         <Input name="approval_cost_threshold" type="number" min={0} step="any" required defaultValue={threshold} disabled={!canEdit} />
       </Field>
       <fieldset disabled={!canEdit}>

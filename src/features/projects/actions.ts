@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { nanoid } from "nanoid";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { getCurrentUser } from "@/lib/session";
 import { saveUploadsFromForm } from "@/lib/files";
@@ -9,8 +9,12 @@ import { todayISO } from "@/lib/format";
 import { syncInvoiceCost, syncProgressMaterialCosts } from "@/lib/metrics";
 import { ENUMS } from "@/lib/status";
 import type { Assignment, Project, Stage, SubInvoice } from "@/lib/types";
+import { insertAssignment } from "./assignment-core";
 import { firstLine, lineLengthKm, measureGeometry, sliceLine } from "./geo";
-import { requireAnyPermission, requirePermission } from "@/lib/auth";
+import { requireAnyPermission, requirePermission, type AuthUser } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { getEntityById } from "@/lib/entities";
+import { nextCode } from "@/features/tenders/conversion";
 import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
 import { DEFAULT_VAT_RATE, deductions, fromGross, fromSubtotal } from "@/features/invoices/calc";
 import { applyCertificationToLines, dueDate, getAssignmentBoq, getAssignmentFacts, insertInvoiceLines, lumpLine, parseInvoiceLines, previousCertified } from "@/features/invoices/lines";
@@ -43,9 +47,10 @@ const oneOf = (kind: keyof typeof ENUMS, v: string, label: string): string => {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const lines = (f: FormData, k: string): string[] => f.getAll(k).map((v) => String(v ?? "").trim());
 
-function project(id: number): Project {
+function project(id: number, who: AuthUser): Project {
   const p = getDb().prepare("SELECT * FROM projects WHERE id = ?").get(id) as Project | undefined;
   if (!p) throw new Error("Project not found");
+  assertUserEntity(who, p.entity_id, "Project"); // records of a country the user cannot access do not exist for them
   return p;
 }
 function refresh(projectId: number, tab?: string) {
@@ -59,19 +64,19 @@ function refresh(projectId: number, tab?: string) {
 /* ---------------------------------------------------------------- project */
 
 export async function updateProjectStatus(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const id = Number(form.get("id"));
   const status = oneOf("projectStatus", str(form, "status"), "status");
-  const p = project(id);
+  const p = project(id, caller);
   getDb().prepare("UPDATE projects SET status = ? WHERE id = ?").run(status, id);
   await logActivity("project", id, "status", `Status changed ${p.status} → ${status}`);
   refresh(id);
 }
 
 export async function createSubProject(form: FormData): Promise<void> {
-  await requirePermission("projects", "create");
+  const caller = await requirePermission("projects", "create");
   const parentId = Number(form.get("parent_id"));
-  const parent = project(parentId);
+  const parent = project(parentId, caller);
   const name = str(form, "name");
   if (!name) throw new Error("Name is required");
   const db = getDb();
@@ -90,16 +95,13 @@ export async function createSubProject(form: FormData): Promise<void> {
       if (qty === null) { qty = r2(seg.to - seg.from); unit = "km"; }
     }
   }
-  const year = new Date().getFullYear();
-  const maxN = (db.prepare("SELECT code FROM projects WHERE code LIKE ?").all(`PRJ-${year}-%`) as { code: string }[])
-    .reduce((m, r) => Math.max(m, Number(r.code.split("-").pop()) || 0), 0);
-  const code = `PRJ-${year}-${String(maxN + 1).padStart(3, "0")}`;
+  const code = nextCode("projects", "PRJ", parent.entity_id);
   const id = Number(db.prepare(
-    `INSERT INTO projects(code, name, tender_id, client_id, parent_id, category, region, location, contract_value, budget_cost, start_date, end_date, status, manager_id, total_quantity, quantity_unit, geometry, description)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    `INSERT INTO projects(code, name, tender_id, client_id, parent_id, category, region, location, contract_value, budget_cost, start_date, end_date, status, manager_id, total_quantity, quantity_unit, geometry, description, entity_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     code, name, null, parent.client_id, parentId, parent.category, strOrNull(form, "region") ?? parent.region, strOrNull(form, "location") ?? parent.location,
     num(form, "contract_value"), num(form, "budget_cost"), dateOrNull(form, "start_date") ?? parent.start_date, dateOrNull(form, "end_date") ?? parent.end_date,
-    "planning", idOrNull(form, "manager_id") ?? parent.manager_id, qty, unit, geometry, strOrNull(form, "description")).lastInsertRowid);
+    "planning", idOrNull(form, "manager_id") ?? parent.manager_id, qty, unit, geometry, strOrNull(form, "description"), parent.entity_id).lastInsertRowid);
   await logActivity("project", id, "created", `Sub-project ${code} created under ${parent.code}`);
   await logActivity("project", parentId, "sub_project", `Sub-project ${code} – ${name} added`);
   refresh(parentId);
@@ -108,9 +110,9 @@ export async function createSubProject(form: FormData): Promise<void> {
 /* ---------------------------------------------------------------- stages */
 
 export async function saveStage(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const projectId = Number(form.get("project_id"));
-  project(projectId);
+  project(projectId, caller);
   const id = Number(form.get("id")) || 0;
   const name = str(form, "name");
   if (!name) throw new Error("Stage name is required");
@@ -139,11 +141,12 @@ export async function saveStage(form: FormData): Promise<void> {
 }
 
 export async function deleteStage(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const id = Number(form.get("id"));
   const db = getDb();
   const s = db.prepare("SELECT * FROM stages WHERE id = ?").get(id) as Stage | undefined;
   if (!s) return;
+  project(s.project_id, caller);
   const used = (db.prepare("SELECT (SELECT COUNT(*) FROM progress_reports WHERE stage_id=?) + (SELECT COUNT(*) FROM assignments WHERE stage_id=?) c").get(id, id) as { c: number }).c;
   if (used > 0) throw new Error("Stage has progress reports or subcontracts; remove them first");
   db.prepare("DELETE FROM stages WHERE id = ?").run(id);
@@ -159,8 +162,8 @@ export async function deleteStage(form: FormData): Promise<void> {
  * with that id or create a new stage (when isNew).
  */
 export async function saveMapGeometry(projectId: number, fc: GeoJSON.FeatureCollection): Promise<{ updatedStages: number; createdStages: number; projectUpdated: boolean }> {
-  await requirePermission("project_map", "edit");
-  const p = project(projectId);
+  const caller = await requirePermission("project_map", "edit");
+  const p = project(projectId, caller);
   const db = getDb();
   const res = { updatedStages: 0, createdStages: 0, projectUpdated: false };
   const projectFeats: GeoJSON.Feature[] = [];
@@ -203,8 +206,8 @@ export async function saveMapGeometry(projectId: number, fc: GeoJSON.FeatureColl
   return res;
 }
 
-async function createSegments(projectId: number, bounds: number[], replace: boolean): Promise<number> {
-  const p = project(projectId);
+async function createSegments(projectId: number, bounds: number[], replace: boolean, who: AuthUser): Promise<number> {
+  const p = project(projectId, who);
   const line = firstLine(p.geometry);
   if (!line) throw new Error("The project has no route (LineString). Draw the route first.");
   const db = getDb();
@@ -237,30 +240,30 @@ async function createSegments(projectId: number, bounds: number[], replace: bool
 }
 
 export async function splitRouteEqual(form: FormData): Promise<void> {
-  await requirePermission("project_map", "edit");
+  const caller = await requirePermission("project_map", "edit");
   const projectId = Number(form.get("project_id"));
   const n = Math.floor(num(form, "n"));
   if (n < 2 || n > 100) throw new Error("Number of stages must be between 2 and 100");
-  const line = firstLine(project(projectId).geometry);
+  const line = firstLine(project(projectId, caller).geometry);
   if (!line) throw new Error("The project has no route (LineString). Draw the route first.");
   const total = lineLengthKm(line);
   const bounds = Array.from({ length: n + 1 }, (_, i) => (total * i) / n);
-  const made = await createSegments(projectId, bounds, form.get("replace") === "on");
+  const made = await createSegments(projectId, bounds, form.get("replace") === "on", caller);
   await logActivity("project", projectId, "stages", `Route split into ${made} equal stages`);
   refresh(projectId);
 }
 
 export async function splitRouteAtChainages(form: FormData): Promise<void> {
-  await requirePermission("project_map", "edit");
+  const caller = await requirePermission("project_map", "edit");
   const projectId = Number(form.get("project_id"));
-  const line = firstLine(project(projectId).geometry);
+  const line = firstLine(project(projectId, caller).geometry);
   if (!line) throw new Error("The project has no route (LineString). Draw the route first.");
   const total = lineLengthKm(line);
   const cuts = str(form, "chainages").split(/[\s,;]+/).filter(Boolean).map(Number);
   if (!cuts.length || cuts.some((c) => !Number.isFinite(c))) throw new Error("Enter chainages in km separated by commas, e.g. 5, 12.5, 20");
   const inner = [...new Set(cuts.filter((c) => c > 0.0005 && c < total - 0.0005))].sort((a, b) => a - b);
   if (!inner.length) throw new Error(`Chainages must lie inside the route (0–${total.toFixed(2)} km)`);
-  const made = await createSegments(projectId, [0, ...inner, total], form.get("replace") === "on");
+  const made = await createSegments(projectId, [0, ...inner, total], form.get("replace") === "on", caller);
   await logActivity("project", projectId, "stages", `Route split at chainages ${inner.join(", ")} km into ${made} stages`);
   refresh(projectId);
 }
@@ -270,10 +273,14 @@ export async function splitRouteAtChainages(form: FormData): Promise<void> {
 export async function saveAssignment(form: FormData): Promise<void> {
   const user = await requirePermission("subcontractors", "edit");
   const projectId = Number(form.get("project_id"));
-  project(projectId);
+  const proj = project(projectId, user);
   const id = Number(form.get("id")) || 0;
   const subId = idOrNull(form, "subcontractor_id");
   if (!subId) throw new Error("Subcontractor is required");
+  // a subcontract links a project and a subcontractor of the SAME country
+  const subRow = getDb().prepare("SELECT entity_id FROM subcontractors WHERE id = ?").get(subId) as { entity_id: number } | undefined;
+  if (!subRow) throw new Error("Subcontractor not found");
+  if (subRow.entity_id !== proj.entity_id) throw new Error("The subcontractor belongs to another country than this project");
   const status = oneOf("assignmentStatus", str(form, "status") || "draft", "status");
   const qty = numOrNull(form, "quantity"), rate = numOrNull(form, "unit_rate");
   let value = num(form, "contract_value");
@@ -296,10 +303,9 @@ export async function saveAssignment(form: FormData): Promise<void> {
       db.prepare("UPDATE assignments SET stage_id=?, subcontractor_id=?, scope=?, contract_value=?, quantity=?, quantity_unit=?, unit_rate=?, start_date=?, end_date=?, payment_terms=?, advance_pct=?, retention_pct=?, payment_days=?, status=? WHERE id=? AND project_id=?")
         .run(...vals, id, projectId);
     } else {
-      const maxN = (db.prepare("SELECT code FROM assignments WHERE code LIKE 'SC-%'").all() as { code: string }[]).reduce((m, r) => Math.max(m, Number(r.code.slice(3)) || 0), 0);
-      const code = `SC-${String(maxN + 1).padStart(3, "0")}`;
-      savedId = Number(db.prepare(`INSERT INTO assignments(stage_id, subcontractor_id, scope, contract_value, quantity, quantity_unit, unit_rate, start_date, end_date, payment_terms, advance_pct, retention_pct, payment_days, status, project_id, code, portal_token, portal_enabled)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`).run(...vals, projectId, code, nanoid(24)).lastInsertRowid);
+      savedId = insertAssignment(db, proj.entity_id, { projectId, stageId: vals[0] as number | null, subcontractorId: subId, scope: vals[2] as string | null, contractValue: value, quantity: qty,
+        quantityUnit: vals[5] as string | null, unitRate: rate, startDate: sd, endDate: ed, paymentTerms: vals[9] as string | null, advancePct: adv, retentionPct: ret,
+        paymentDays: vals[12] as number, status: effective }).id;
       created = true;
     }
     if (activate && !hasOpenRequest("subcontract_award", savedId)) submitForApproval("subcontract_award", savedId, { userId: user.id });
@@ -314,11 +320,12 @@ export async function saveAssignment(form: FormData): Promise<void> {
 }
 
 export async function deleteAssignment(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const caller = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id"));
   const db = getDb();
   const a = db.prepare("SELECT * FROM assignments WHERE id = ?").get(id) as Assignment | undefined;
   if (!a) return;
+  project(a.project_id, caller);
   const used = (db.prepare("SELECT (SELECT COUNT(*) FROM progress_reports WHERE assignment_id=?) + (SELECT COUNT(*) FROM sub_invoices WHERE assignment_id=?) c").get(id, id) as { c: number }).c;
   if (used > 0) throw new Error("Subcontract has progress reports or invoices; terminate it instead of deleting");
   db.prepare("DELETE FROM assignments WHERE id = ?").run(id);
@@ -327,12 +334,13 @@ export async function deleteAssignment(form: FormData): Promise<void> {
 }
 
 export async function setPortalEnabled(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const caller = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id"));
   const enable = form.get("enable") === "1";
   const db = getDb();
   const a = db.prepare("SELECT * FROM assignments WHERE id = ?").get(id) as Assignment | undefined;
   if (!a) throw new Error("Subcontract not found");
+  project(a.project_id, caller);
   if (enable && a.status !== "active") throw new Error("The portal can be enabled only for an active (approved) subcontract");
   if (enable && !a.portal_token) db.prepare("UPDATE assignments SET portal_token = ? WHERE id = ?").run(nanoid(24), id);
   db.prepare("UPDATE assignments SET portal_enabled = ? WHERE id = ?").run(enable ? 1 : 0, id);
@@ -341,11 +349,12 @@ export async function setPortalEnabled(form: FormData): Promise<void> {
 }
 
 export async function regeneratePortalToken(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const caller = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id"));
   const db = getDb();
   const a = db.prepare("SELECT * FROM assignments WHERE id = ?").get(id) as Assignment | undefined;
   if (!a) throw new Error("Subcontract not found");
+  project(a.project_id, caller);
   db.prepare("UPDATE assignments SET portal_token = ? WHERE id = ?").run(nanoid(24), id);
   await logActivity("assignment", id, "portal", `Portal link regenerated for ${a.code}`);
   refresh(a.project_id);
@@ -354,9 +363,9 @@ export async function regeneratePortalToken(form: FormData): Promise<void> {
 /* ---------------------------------------------------------------- progress */
 
 export async function addProgressReport(form: FormData): Promise<void> {
-  await requirePermission("progress", "create");
+  const caller = await requirePermission("progress", "create");
   const projectId = Number(form.get("project_id"));
-  project(projectId);
+  project(projectId, caller);
   const db = getDb();
   const assignmentId = idOrNull(form, "assignment_id");
   let stageId = idOrNull(form, "stage_id");
@@ -408,9 +417,10 @@ export async function addProgressReport(form: FormData): Promise<void> {
 async function setReportStatus(form: FormData, status: "verified" | "rejected"): Promise<void> {
   const id = Number(form.get("id"));
   const db = getDb();
-  await requirePermission("progress", "verify");
+  const caller = await requirePermission("progress", "verify");
   const r = db.prepare("SELECT * FROM progress_reports WHERE id = ?").get(id) as { project_id: number; stage_id: number | null; report_date: string } | undefined;
   if (!r) throw new Error("Report not found");
+  project(r.project_id, caller);
   const user = await getCurrentUser();
   db.transaction(() => {
     const reason = status === "rejected" ? str(form, "reason") || null : null;
@@ -430,14 +440,14 @@ export async function rejectProgressReport(form: FormData): Promise<void> { awai
 export async function addManualCost(form: FormData): Promise<void> {
   const user = await requirePermission("project_costs", "create");
   const projectId = Number(form.get("project_id"));
-  project(projectId);
+  const proj = project(projectId, user);
   const category = oneOf("budgetCategory", str(form, "category"), "category");
   const amount = num(form, "amount");
   if (!(amount > 0)) throw new Error("Amount must be greater than zero");
   const description = str(form, "description");
   if (!description) throw new Error("Description is required");
   const stageId = idOrNull(form, "stage_id"); const date = dateOrNull(form, "cost_date") ?? todayISO();
-  const threshold = Number(getSetting("approval_cost_threshold", "50000")) || 50000;
+  const threshold = getEntityById(proj.entity_id)?.approval_cost_threshold ?? 50000; // approval limit of the project's country, in its currency
   const db = getDb();
   if (amount > threshold) {
     // Above the threshold the cost waits for the project_cost approval workflow before it is posted to the ledger.
@@ -457,11 +467,12 @@ export async function addManualCost(form: FormData): Promise<void> {
 }
 
 export async function deleteManualCost(form: FormData): Promise<void> {
-  await requirePermission("project_costs", "create");
+  const caller = await requirePermission("project_costs", "create");
   const id = Number(form.get("id"));
   const db = getDb();
   const c = db.prepare("SELECT * FROM project_costs WHERE id = ?").get(id) as { project_id: number; source_type: string | null; description: string | null } | undefined;
   if (!c) return;
+  project(c.project_id, caller);
   if (c.source_type && c.source_type !== "manual") throw new Error("Auto-posted costs cannot be deleted; change the source record instead");
   db.prepare("DELETE FROM project_costs WHERE id = ?").run(id);
   await logActivity("project", c.project_id, "cost", `Manual cost deleted: ${c.description ?? id}`);
@@ -470,9 +481,10 @@ export async function deleteManualCost(form: FormData): Promise<void> {
 
 /* ---------------------------------------------------------------- invoices */
 
-function invoice(id: number): SubInvoice {
+function invoice(id: number, who: AuthUser): SubInvoice {
   const i = getDb().prepare("SELECT * FROM sub_invoices WHERE id = ?").get(id) as SubInvoice | undefined;
   if (!i) throw new Error("Invoice not found");
+  assertUserEntity(who, (getDb().prepare("SELECT entity_id e FROM projects WHERE id = ?").get(i.project_id) as { e: number } | undefined)?.e, "Invoice");
   return i;
 }
 function terms(assignmentId: number): Assignment {
@@ -483,6 +495,7 @@ export async function createInvoice(form: FormData): Promise<ActionResult> {
   return guard(async () => {
   const user = await requirePermission("invoices", "certify");
   const projectId = Number(form.get("project_id"));
+  const proj = project(projectId, user);
   const assignmentId = idOrNull(form, "assignment_id");
   if (!assignmentId) throw new Error("Subcontract is required");
   const a = terms(assignmentId);
@@ -493,11 +506,11 @@ export async function createInvoice(form: FormData): Promise<ActionResult> {
   const parsed = parseInvoiceLines(form, getAssignmentBoq(assignmentId), { allowCustom: true, fail });
   let subtotal: number, vat: number, gross: number;
   if (parsed.length) {
-    ({ subtotal, vat, gross } = fromSubtotal(parsed.reduce((t, l) => t + l.amount, 0), DEFAULT_VAT_RATE));
+    ({ subtotal, vat, gross } = fromSubtotal(parsed.reduce((t, l) => t + l.amount, 0), getEntityById(proj.entity_id)?.vat_rate ?? DEFAULT_VAT_RATE));
   } else {
     const claimed = num(form, "claimed_amount");
     if (!(claimed > 0)) throw new Error("Enter the line quantities or a claimed amount greater than zero");
-    ({ subtotal, vat, gross } = fromGross(claimed, DEFAULT_VAT_RATE));
+    ({ subtotal, vat, gross } = fromGross(claimed, getEntityById(proj.entity_id)?.vat_rate ?? DEFAULT_VAT_RATE));
   }
   const uploads = readInvoiceUploads(form, { requireTaxInvoice: false, fail });
   const db = getDb();
@@ -513,7 +526,7 @@ export async function createInvoice(form: FormData): Promise<ActionResult> {
        VALUES (?,?,?,?,?,?,?,?, 'submitted', 'internal', ?, ?,?,?,?,?,?,?,?,?, ?,?,?,?)`).run(
       assignmentId, projectId, no, date, dateOrNull(form, "period_from"), dateOrNull(form, "period_to"),
       gross, a.contract_value ? r2((subtotal / a.contract_value) * 100) : 0, strOrNull(form, "notes"),
-      strOrNull(form, "sub_invoice_ref"), getSetting("currency", "AED"), DEFAULT_VAT_RATE, subtotal, vat, gross, a.retention_pct || 0, a.advance_pct || 0, previousCertified(assignmentId),
+      strOrNull(form, "sub_invoice_ref"), getEntityById(proj.entity_id)?.currency ?? "AED", getEntityById(proj.entity_id)?.vat_rate ?? DEFAULT_VAT_RATE, subtotal, vat, gross, a.retention_pct || 0, a.advance_pct || 0, previousCertified(assignmentId),
       user.name, user.email, new Date().toISOString(), dueDate(date, a.payment_days)).lastInsertRowid);
     insertInvoiceLines(db, newId, lineRows);
     return newId;
@@ -526,9 +539,9 @@ export async function createInvoice(form: FormData): Promise<ActionResult> {
 }
 
 export async function startInvoiceReview(form: FormData): Promise<void> {
-  await requirePermission("invoices", "certify");
+  const caller = await requirePermission("invoices", "certify");
   const id = Number(form.get("id"));
-  const i = invoice(id);
+  const i = invoice(id, caller);
   if (i.status !== "submitted") throw new Error("Only submitted invoices can go under review");
   const reviewer = await getCurrentUser();
   getDb().prepare("UPDATE sub_invoices SET status='under_review', reviewed_by=? WHERE id=?").run(reviewer.id || null, id);
@@ -539,9 +552,9 @@ export async function startInvoiceReview(form: FormData): Promise<void> {
 
 /** Certify: set certified amount, auto-compute retention & advance recovery from assignment terms. */
 export async function certifyInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "certify");
+  const caller = await requirePermission("invoices", "certify");
   const id = Number(form.get("id"));
-  const i = invoice(id);
+  const i = invoice(id, caller);
   if (!["submitted", "under_review", "certified"].includes(i.status)) throw new Error(`Cannot certify an invoice that is ${i.status}`);
   const certified = num(form, "certified_amount", i.claimed_amount);
   if (certified < 0) throw new Error("Certified amount cannot be negative");
@@ -564,9 +577,9 @@ export async function certifyInvoice(form: FormData): Promise<void> {
 }
 
 export async function approveInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "approve");
+  const caller = await requirePermission("invoices", "approve");
   const id = Number(form.get("id"));
-  const i = invoice(id);
+  const i = invoice(id, caller);
   if (i.status !== "certified") throw new Error("Invoice must be certified before approval");
   const user = await getCurrentUser();
   if (hasOpenRequest("sub_invoice", id)) throw new Error("Invoice approval is already pending");
@@ -576,9 +589,9 @@ export async function approveInvoice(form: FormData): Promise<void> {
 }
 
 export async function payInvoice(form: FormData): Promise<void> {
-  await requirePermission("invoices", "pay");
+  const caller = await requirePermission("invoices", "pay");
   const id = Number(form.get("id"));
-  const i = invoice(id);
+  const i = invoice(id, caller);
   if (i.status !== "approved") throw new Error("Invoice must be approved before payment");
   const amount = num(form, "paid_amount", i.net_payable);
   if (!(amount > 0)) throw new Error("Paid amount must be greater than zero");
@@ -590,9 +603,9 @@ export async function payInvoice(form: FormData): Promise<void> {
 }
 
 export async function rejectInvoice(form: FormData): Promise<void> {
-  await requireAnyPermission("invoices", ["certify", "approve"]);
+  const caller = await requireAnyPermission("invoices", ["certify", "approve"]);
   const id = Number(form.get("id"));
-  const i = invoice(id);
+  const i = invoice(id, caller);
   if (i.status === "paid") throw new Error("A paid invoice cannot be rejected");
   const db = getDb();
   const actor = await getCurrentUser();
@@ -608,7 +621,7 @@ export async function rejectInvoice(form: FormData): Promise<void> {
 /* ---------------------------------------------------------------- certificates */
 
 export async function saveCertificate(form: FormData): Promise<void> {
-  await requirePermission("certificates", "issue");
+  const caller = await requirePermission("certificates", "issue");
   const projectId = Number(form.get("project_id"));
   const assignmentId = idOrNull(form, "assignment_id");
   if (!assignmentId) throw new Error("Subcontract is required");
@@ -618,9 +631,9 @@ export async function saveCertificate(form: FormData): Promise<void> {
   const issueNow = form.get("issue_now") === "on";
   const db = getDb();
   const user = await getCurrentUser();
-  const p = project(projectId);
+  const p = project(projectId, caller);
   const n = (db.prepare("SELECT COUNT(*) c FROM completion_certificates WHERE project_id = ?").get(projectId) as { c: number }).c + 1;
-  const no = strOrNull(form, "cert_no") ?? `CC-${p.code.replace("PRJ-", "")}-${String(n).padStart(2, "0")}`;
+  const no = strOrNull(form, "cert_no") ?? `CC-${p.code.replace(/^(OM-)?PRJ-/, "$1")}-${String(n).padStart(2, "0")}`;
   const id = Number(db.prepare(
     `INSERT INTO completion_certificates(assignment_id, project_id, stage_id, cert_type, cert_no, cert_date, percent, quantity, remarks, status, issued_by, source)
      VALUES (?,?,?,?,?,?,?,?,?,?,?, 'internal')`).run(
@@ -639,6 +652,7 @@ async function setCertStatus(form: FormData, status: "issued" | "rejected"): Pro
   const user = await requirePermission("certificates", "issue");
   const c = db.prepare("SELECT * FROM completion_certificates WHERE id = ?").get(id) as { project_id: number; cert_no: string | null; status: string } | undefined;
   if (!c) throw new Error("Certificate not found");
+  project(c.project_id, user);
   if (c.status === "issued" && status === "issued") return;
   if (status === "issued") {
     if (hasOpenRequest("completion_certificate", id)) throw new Error("Certificate approval is already pending");
@@ -659,9 +673,9 @@ export async function rejectCertificate(form: FormData): Promise<void> { await s
 /* ---------------------------------------------------------------- issues */
 
 export async function saveIssue(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const projectId = Number(form.get("project_id"));
-  project(projectId);
+  project(projectId, caller);
   const id = Number(form.get("id")) || 0;
   const title = str(form, "title");
   if (!title) throw new Error("Title is required");
@@ -681,23 +695,25 @@ export async function saveIssue(form: FormData): Promise<void> {
 }
 
 export async function deleteIssue(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const id = Number(form.get("id"));
   const db = getDb();
   const i = db.prepare("SELECT project_id, title FROM issues WHERE id = ?").get(id) as { project_id: number; title: string } | undefined;
   if (!i) return;
+  project(i.project_id, caller);
   db.prepare("DELETE FROM issues WHERE id = ?").run(id);
   await logActivity("project", i.project_id, "issue", `Issue "${i.title}" deleted`);
   refresh(i.project_id);
 }
 
 export async function setIssueStatus(form: FormData): Promise<void> {
-  await requirePermission("projects", "edit");
+  const caller = await requirePermission("projects", "edit");
   const id = Number(form.get("id"));
   const status = oneOf("issueStatus", str(form, "status"), "status");
   const db = getDb();
   const i = db.prepare("SELECT project_id, title FROM issues WHERE id = ?").get(id) as { project_id: number; title: string } | undefined;
   if (!i) return;
+  project(i.project_id, caller);
   db.prepare("UPDATE issues SET status = ?, resolved_on = CASE WHEN ? = 'closed' THEN ? ELSE NULL END WHERE id = ?").run(status, status, todayISO(), id);
   await logActivity("project", i.project_id, "issue", `Issue "${i.title}" → ${status}`);
   refresh(i.project_id);

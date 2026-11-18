@@ -1,11 +1,27 @@
-// Pure formatting helpers (safe in client components). Currency comes from the settings table: db.ts publishes it to
-// globalThis.__opsCurrency on first DB access and on every setSetting(); formatMoney reads that. Use formatMoney everywhere.
+// Pure formatting helpers (safe in client components). The default currency of formatMoney is REQUEST-scoped, never process-global:
+//  - server (RSC): a resolver registered by lib/request-context.ts reads the per-request React cache (active country, or the record's country on a
+//    detail page, or the portal tenant's country);
+//  - browser: <CurrencyProvider> (components/CurrencyProvider.tsx) sets the module default on the client only; during SSR client components read the
+//    provider's context via useCurrency() and pass `currency` explicitly.
+// Pass `currency` explicitly whenever the amount belongs to a record whose country may differ from the viewer's active country.
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** Current currency code (from settings, default AED). */
+let resolver: (() => string | undefined) | null = null;
+let browserDefault: string | undefined;
+/** Server only: registers the request-scoped currency resolver. */
+export function registerCurrencyResolver(fn: () => string | undefined): void { resolver = fn; }
+/** Browser only (ignored during SSR): module default used by client code that has no context. */
+export function setBrowserCurrency(code: string): void { if (typeof window !== "undefined") browserDefault = code; }
+
+/** Currency of the current request / browser context (falls back to AED). */
 export function getCurrency(): string {
-  return (globalThis as unknown as { __opsCurrency?: string }).__opsCurrency || "AED";
+  return resolver?.() || browserDefault || "AED";
+}
+
+/** Minor-unit digits of a currency: 3 for OMR, BHD, KWD, JOD, otherwise 2. */
+export function currencyDecimals(cur: string | null | undefined): number {
+  return ["OMR", "BHD", "KWD", "JOD"].includes((cur ?? "").toUpperCase()) ? 3 : 2;
 }
 
 /** "AED 1,234,567" (no decimals unless `decimals`). Pass `currency` explicitly in client components. */
@@ -15,6 +31,11 @@ export function formatMoney(value: number | null | undefined, opts: { decimals?:
   if (opts.compact) return `${cur} ${compactNumber(value)}`;
   const d = opts.decimals ?? 0;
   return `${cur} ${value.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}`;
+}
+/** "≈ USD 35,914.20 (rate 2.600780, 08 Aug 2026)" - the reporting-currency equivalent of a row (amount in USD, the locked rate and its date). */
+export function usdEquivalent(usd: number | null | undefined, rate: number | null | undefined, date: string | null | undefined): string | null {
+  if (usd === null || usd === undefined || !rate) return null;
+  return `≈ USD ${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (rate ${rate.toFixed(6)}, ${formatDate(date)})`;
 }
 /** 1.2M / 340K style. */
 export function compactNumber(v: number): string {

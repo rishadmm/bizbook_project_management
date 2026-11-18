@@ -49,14 +49,14 @@ function historyOf(reps: RepRow[], qty: number | null, completed: boolean): Hist
 }
 
 /** One JSON payload for the Live Ops Map: projects, subcontract segments (sliced geometry), issues, delay events. */
-export function getOpsMapData(opts: { includePortal?: boolean; /** restrict to these projects (client portal) */ projectIds?: number[] } = {}): OpsMapData {
+export function getOpsMapData(opts: { includePortal?: boolean; /** restrict to these projects (client portal) */ projectIds?: number[]; /** restrict to one country (internal map); the client portal restricts by project ids */ entityId?: number } = {}): OpsMapData {
   const db = getDb();
   const today = todayISO();
   const only = opts.projectIds ? new Set(opts.projectIds) : null;
   const projectsAll = db.prepare(
     `SELECT p.*, c.name AS client_name, u.name AS manager_name FROM projects p LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN users u ON u.id = p.manager_id
-     WHERE p.status NOT IN ('cancelled') ORDER BY p.code`,
-  ).all() as ProjectRow[];
+     WHERE p.status NOT IN ('cancelled') ${opts.entityId ? "AND p.entity_id = ?" : ""} ORDER BY p.code`,
+  ).all(...(opts.entityId ? [opts.entityId] : [])) as ProjectRow[];
   const projectsRaw = only ? projectsAll.filter((p) => only.has(p.id)) : projectsAll;
   const stages = db.prepare("SELECT * FROM stages ORDER BY project_id, sort, id").all() as StageRow[];
   const asgs = db.prepare(
@@ -70,7 +70,7 @@ export function getOpsMapData(opts: { includePortal?: boolean; /** restrict to t
     status: string; raised_on: string | null; resolved_on: string | null;
   }[];
   const costs = db.prepare("SELECT project_id, cost_date, amount FROM project_costs WHERE cost_date IS NOT NULL ORDER BY cost_date").all() as { project_id: number; cost_date: string; amount: number }[];
-  const subs = db.prepare("SELECT id, name FROM subcontractors WHERE id IN (SELECT DISTINCT subcontractor_id FROM assignments) ORDER BY name").all() as { id: number; name: string }[];
+  const subs = db.prepare(`SELECT id, name FROM subcontractors WHERE id IN (SELECT DISTINCT subcontractor_id FROM assignments) ${opts.entityId ? "AND entity_id = ?" : ""} ORDER BY name`).all(...(opts.entityId ? [opts.entityId] : [])) as { id: number; name: string }[];
 
   const segments: OpsSegment[] = [];
   const projects: OpsProject[] = [];

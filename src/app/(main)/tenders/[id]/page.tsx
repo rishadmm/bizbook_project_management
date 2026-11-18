@@ -5,7 +5,9 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { AttachmentsPanel } from "@/components/AttachmentsPanel";
 import { ActivityTimeline } from "@/components/ActivityTimeline";
 import { can, requirePage } from "@/lib/auth";
-import { getCurrency } from "@/lib/format";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
 import { getRevisions, getBudgetLines, getMarginChanges, getNegotiations, getReviews, getSections, getTender, lookups } from "@/features/tenders/queries";
 import { TERMINAL } from "@/features/tenders/workflow";
 import { OverviewTab } from "@/features/tenders/components/OverviewTab";
@@ -21,6 +23,8 @@ export default async function TenderPage({ params, searchParams }: { params: Pro
   const id = Number(idStr);
   const tender = Number.isInteger(id) ? getTender(id) : undefined;
   if (!tender) notFound();
+  const rec = await assertRecordAccess(tender.entity_id);
+  const currency = rec.entity.currency;
   const sp = await searchParams;
   const sections = getSections(id);
   const reviews = getReviews(id);
@@ -31,12 +35,13 @@ export default async function TenderPage({ params, searchParams }: { params: Pro
     { key: "approvals", label: "Approvals" }, { key: "documents", label: "Documents" }, { key: "activity", label: "Activity" },
   ];
   const tab = resolveTab(sp, tabs, "overview");
-  const { clients, users, departments } = lookups();
+  const { clients, users, departments } = lookups(tender.entity_id);
   const revision = revisions.find((r) => r.id === tender.current_revision_id) ?? null;
   const closed = TERMINAL.includes(tender.status);
 
   return (
-    <>
+    <CurrencyProvider currency={currency}>
+      {rec.foreign && <EntityBar what="tender" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader title={tender.title} breadcrumbs={[{ label: "Tenders", href: "/tenders" }, { label: tender.code }]}
         badges={<><StatusBadge kind="tenderStatus" value={tender.status} />{revision && <StatusBadge kind="revisionStatus" value={revision.status} className="opacity-80" />}</>}
         description={`${tender.code} · ${tender.client_name ?? "No client"}${revision ? ` · current revision ${revision.label}` : ""}`} />
@@ -46,12 +51,12 @@ export default async function TenderPage({ params, searchParams }: { params: Pro
       {tab === "departments" && <DepartmentsTab tenderId={id} sections={sections} users={users} departments={departments} locked={closed || !can(me, "tenders", "edit")} />}
       {tab === "budget" && (revision
         ? <BudgetWorkspace key={revision.id} initialLines={getBudgetLines(revision.id)} revisionId={revision.id} revisionLabel={revision.label ?? `R${revision.rev_no}`}
-            editable={revision.status === "draft" && !closed && can(me, "tender_budget", "edit")} readOnlyReason={closed ? `tender is ${tender.status}` : `revision ${revision.label} is ${revision.status}`} tenderCode={tender.code} currency={getCurrency()} />
+            editable={revision.status === "draft" && !closed && can(me, "tender_budget", "edit")} readOnlyReason={closed ? `tender is ${tender.status}` : `revision ${revision.label} is ${revision.status}`} tenderCode={tender.code} currency={currency} />
         : <p className="text-sm text-slate-500">This tender has no revision.</p>)}
-      {tab === "commercial" && <CommercialTab tender={tender} revisions={revisions} negotiations={getNegotiations(id)} changes={getMarginChanges(id)} currency={getCurrency()} me={me} />}
+      {tab === "commercial" && <CommercialTab tender={tender} revisions={revisions} negotiations={getNegotiations(id)} changes={getMarginChanges(id)} currency={currency} me={me} />}
       {tab === "approvals" && <ApprovalsTab tender={tender} revision={revision} reviews={reviews} me={me} />}
       {tab === "documents" && <AttachmentsPanel entityType="tender" entityId={id} revalidate={`/tenders/${id}`} />}
       {tab === "activity" && <ActivityTimeline entityType="tender" entityId={id} />}
-    </>
+    </CurrencyProvider>
   );
 }

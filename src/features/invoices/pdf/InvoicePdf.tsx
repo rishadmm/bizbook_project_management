@@ -1,11 +1,11 @@
 import { Document, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
+import { currencyDecimals } from "../../../lib/format";
 import { fromGross } from "../calc";
 import type { InvoiceDetail } from "../queries";
 import { amountInWords } from "../words";
 import { pdfFontFamily } from "./fonts";
 
 const PRIMARY = "#635BFF", DARK = "#0F172A", MUTED = "#6B7280", LINE = "#E5E7EB", SOFT = "#EEF2FF";
-const num = (v: number, d = 2) => v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 const qty = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 3 });
 const date = (iso: string | null | undefined) => {
   const m = iso ? /^(\d{4})-(\d{2})-(\d{2})/.exec(iso) : null;
@@ -49,6 +49,8 @@ export function InvoicePdf({ d, generatedAt }: { d: InvoiceDetail; generatedAt: 
   const font = pdfFontFamily();
   const S = styles(font);
   const i = d.invoice, cur = i.currency || "AED";
+  const dec = currencyDecimals(cur);
+  const num = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const wm = WATERMARK[i.status];
   const cert = fromGross(d.certifiedState ? i.certified_amount : 0, i.vat_rate);
   const W = { n: "4%", d: "28%", u: "6%", c: "10%", p: "10%", t: "10%", cu: "10%", r: "10%", a: "12%" };
@@ -78,7 +80,7 @@ export function InvoicePdf({ d, generatedAt }: { d: InvoiceDetail; generatedAt: 
             <Text style={S.label}>Subcontractor</Text>
             <Text style={[S.bold, { fontSize: 10 }]}>{d.subcontractor.name}</Text>
             {d.subcontractor.address && <Text>{d.subcontractor.address}</Text>}
-            <Text>TRN {d.subcontractor.tax_no ?? "—"}{d.subcontractor.trade_license_no ? `  ·  Licence ${d.subcontractor.trade_license_no}` : ""}</Text>
+            <Text>{d.company.tax_label} {d.subcontractor.tax_no ?? "—"}{d.subcontractor.trade_license_no ? `  ·  Licence ${d.subcontractor.trade_license_no}` : ""}</Text>
             <Text style={{ color: MUTED }}>{[d.subcontractor.contact_person, d.subcontractor.phone, d.subcontractor.email].filter(Boolean).join("  ·  ")}</Text>
             {d.subcontractor.bank_name && <Text style={{ color: MUTED }}>{d.subcontractor.bank_name}{d.subcontractor.iban_masked ? `  ·  IBAN ${d.subcontractor.iban_masked}` : ""}</Text>}
           </View>
@@ -86,7 +88,7 @@ export function InvoicePdf({ d, generatedAt }: { d: InvoiceDetail; generatedAt: 
             <Text style={S.label}>Bill to</Text>
             <Text style={[S.bold, { fontSize: 10 }]}>{d.company.name}</Text>
             {d.company.address && <Text>{d.company.address}</Text>}
-            <Text>TRN {d.company.trn || "—"}</Text>
+            <Text>{d.company.tax_label} {d.company.trn || "—"}</Text>
             {d.client && <Text style={{ color: MUTED }}>Client: {d.client.name}</Text>}
           </View>
         </View>

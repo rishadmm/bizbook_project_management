@@ -4,23 +4,24 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { CardSection } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/Badge";
-import { requirePage } from "@/lib/auth";
+import { getActiveEntity, requirePage } from "@/lib/auth";
 
 export default async function SearchPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   await requirePage();
+  const entity = await getActiveEntity();
   const q = ((await searchParams).q ?? "").trim();
   const like = `%${q}%`;
   const db = getDb();
-  const tenders = q ? db.prepare("SELECT id, code, title, status FROM tenders WHERE code LIKE ? OR title LIKE ? ORDER BY id DESC LIMIT 20").all(like, like) as { id: number; code: string; title: string; status: string }[] : [];
-  const projects = q ? db.prepare("SELECT id, code, name, status FROM projects WHERE code LIKE ? OR name LIKE ? ORDER BY id DESC LIMIT 20").all(like, like) as { id: number; code: string; name: string; status: string }[] : [];
-  const subs = q ? db.prepare("SELECT id, code, name, trade, status FROM subcontractors WHERE code LIKE ? OR name LIKE ? OR trade LIKE ? ORDER BY name LIMIT 20").all(like, like, like) as { id: number; code: string | null; name: string; trade: string | null; status: string }[] : [];
+  const tenders = q ? db.prepare("SELECT id, code, title, status FROM tenders WHERE entity_id = ? AND (code LIKE ? OR title LIKE ?) ORDER BY id DESC LIMIT 20").all(entity.id, like, like) as { id: number; code: string; title: string; status: string }[] : [];
+  const projects = q ? db.prepare("SELECT id, code, name, status FROM projects WHERE entity_id = ? AND (code LIKE ? OR name LIKE ?) ORDER BY id DESC LIMIT 20").all(entity.id, like, like) as { id: number; code: string; name: string; status: string }[] : [];
+  const subs = q ? db.prepare("SELECT id, code, name, trade, status FROM subcontractors WHERE entity_id = ? AND (code LIKE ? OR name LIKE ? OR trade LIKE ?) ORDER BY name LIMIT 20").all(entity.id, like, like, like) as { id: number; code: string | null; name: string; trade: string | null; status: string }[] : [];
   const total = tenders.length + projects.length + subs.length;
   const Row = ({ href, code, name, badge }: { href: string; code?: string | null; name: string; badge: React.ReactNode }) => (
     <li><Link href={href} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50"><span className="text-sm"><span className="mr-2 font-mono text-xs text-slate-500">{code}</span>{name}</span>{badge}</Link></li>
   );
   return (
     <>
-      <PageHeader title="Search" description={q ? `${total} result${total === 1 ? "" : "s"} for “${q}”` : "Type in the search box above."} />
+      <PageHeader title="Search" description={q ? `${total} result${total === 1 ? "" : "s"} for “${q}” in ${entity.country}` : "Type in the search box above."} />
       {q && total === 0 && <EmptyState title="No matches" description="Try a tender code, project name or subcontractor." />}
       <div className="space-y-4">
         {tenders.length > 0 && <CardSection title="Tenders" flush><ul className="divide-y divide-slate-100">{tenders.map((t) => <Row key={t.id} href={`/tenders/${t.id}`} code={t.code} name={t.title} badge={<StatusBadge kind="tenderStatus" value={t.status} />} />)}</ul></CardSection>}

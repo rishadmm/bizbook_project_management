@@ -6,7 +6,8 @@ import { ProjectMapLazy } from "@/components/map/ProjectMap";
 import type { MapFeature } from "@/components/map/types";
 import { getCurrency, countdownLabel, daysUntil, formatDate, formatMoney, formatNumber, formatRatio, pct } from "@/lib/format";
 import { getDelayAttribution, getSubcontractorPerformance } from "@/lib/metrics";
-import { requirePage } from "@/lib/auth";
+import { can, getActiveEntity, requirePage } from "@/lib/auth";
+import { procurementCard } from "@/features/procurement/queries";
 import { getMyPendingTasks } from "@/lib/approvals/engine";
 import { DOC_LABEL } from "@/lib/approvals/meta";
 import { RAG_HEX, statusHex, statusLabel } from "@/lib/status";
@@ -30,16 +31,17 @@ function Pending({ title, count, children }: { title: string; count: number; chi
 
 export default async function DashboardPage() {
   const me = await requirePage("dashboard");
+  const entity = await getActiveEntity();
   const currency = getCurrency();
-  const funnel = tenderFunnel();
-  const deadlines = upcomingDeadlines();
-  const health = activeProjectHealth();
+  const funnel = tenderFunnel(entity.id);
+  const deadlines = upcomingDeadlines(entity.id);
+  const health = activeProjectHealth(entity.id);
   const port = portfolioTotals(health);
-  const delays = getDelayAttribution(null);
-  const late = getSubcontractorPerformance().filter((s) => s.delayDays > 0).sort((a, b) => b.delayDays - a.delayDays).slice(0, 6);
-  const pending = pendingApprovals();
-  const myTasks = getMyPendingTasks(me.id);
-  const docs = expiringDocuments();
+  const delays = getDelayAttribution(null, entity.id);
+  const late = getSubcontractorPerformance(undefined, entity.id).filter((s) => s.delayDays > 0).sort((a, b) => b.delayDays - a.delayDays).slice(0, 6);
+  const pending = pendingApprovals(entity.id);
+  const myTasks = getMyPendingTasks(me.id, entity.id);
+  const docs = expiringDocuments(entity.id);
   const pendingTotal = myTasks.length + pending.progress.length + pending.invoices.length + pending.certs.length;
 
   const features: MapFeature[] = health.flatMap(({ project: p, m }) =>
@@ -54,7 +56,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Executive dashboard" description={`Welcome back, ${me.name.split(" ")[0]}. Portfolio snapshot as of ${formatDate(new Date().toISOString())}.`} />
+      <PageHeader title="Executive dashboard" description={`Welcome back, ${me.name.split(" ")[0]}. ${entity.country} portfolio snapshot as of ${formatDate(new Date().toISOString())}.`} />
 
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
         <Stat label="Open pipeline" value={formatMoney(funnel.openValue, { compact: true })} hint={`${funnel.openCount} open bids`} icon={<FileCheck2 size={15} />} />
@@ -148,6 +150,16 @@ export default async function DashboardPage() {
           )}
         </CardSection>
       </div>
+
+      {can(me, "procurement", "view") && (() => { const pc = procurementCard(entity.id); return (
+        <CardSection title="Procurement" subtitle="Supplier tenders and registrations" className="mb-5" actions={<Link href="/procurement" className={buttonClass("secondary", "sm")}>Open</Link>}>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="procurement-card">
+            <Link href="/procurement?status=published" className="rounded-xl bg-slate-50 p-3 hover:bg-primary-50"><div className="text-2xl font-extrabold text-dark">{pc.open}</div><div className="text-xs font-semibold text-slate-500">Open tenders</div></Link>
+            <Link href="/procurement?status=published" className="rounded-xl bg-slate-50 p-3 hover:bg-primary-50"><div className={`text-2xl font-extrabold ${pc.closingWeek ? "text-amber-600" : "text-dark"}`}>{pc.closingWeek}</div><div className="text-xs font-semibold text-slate-500">Closing this week</div></Link>
+            <Link href="/subcontractors/registrations" className="rounded-xl bg-slate-50 p-3 hover:bg-primary-50"><div className="text-2xl font-extrabold text-dark">{pc.pendingRegistrations}</div><div className="text-xs font-semibold text-slate-500">Registrations to review</div></Link>
+            <Link href="/procurement?status=award_pending" className="rounded-xl bg-slate-50 p-3 hover:bg-primary-50"><div className={`text-2xl font-extrabold ${pc.awardsPending ? "text-amber-600" : "text-dark"}`}>{pc.awardsPending}</div><div className="text-xs font-semibold text-slate-500">Awards pending approval</div></Link>
+          </div>
+        </CardSection>); })()}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <CardSection title="My pending approvals" subtitle={`${me.name} · ${pendingTotal} item${pendingTotal === 1 ? "" : "s"}`}>

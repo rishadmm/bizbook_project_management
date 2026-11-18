@@ -11,7 +11,8 @@ export const MODULES = {
   ops_map: { label: "Live Ops Map", group: "Projects", actions: ["view"] },
   progress: { label: "Progress reports", group: "Projects", actions: ["view", "create", "verify"] },
   project_costs: { label: "Project costs", group: "Projects", actions: ["view", "create"] },
-  subcontractors: { label: "Subcontractors", group: "Subcontracting", actions: ["view", "create", "edit", "approve", "portal"] },
+  procurement: { label: "Procurement", group: "Procurement", actions: ["view", "create", "edit", "publish", "open", "evaluate", "recommend", "award", "cancel", "setup", "export"] },
+  subcontractors: { label: "Subcontractors", group: "Subcontracting", actions: ["view", "create", "edit", "approve", "portal", "setup"] },
   invoices: { label: "Invoices", group: "Finance", actions: ["view", "certify", "approve", "pay"] },
   certificates: { label: "Completion certificates", group: "Finance", actions: ["view", "issue"] },
   approvals: { label: "Approvals inbox", group: "Administration", actions: ["view"] },
@@ -27,7 +28,7 @@ export type ActionKey = string;
 export type PermissionMap = Partial<Record<ModuleKey, ActionKey[]>>;
 
 export const MODULE_KEYS = Object.keys(MODULES) as ModuleKey[];
-export const MODULE_GROUPS = ["General", "Sales / Tendering", "Projects", "Subcontracting", "Finance", "Administration"] as const;
+export const MODULE_GROUPS = ["General", "Sales / Tendering", "Projects", "Procurement", "Subcontracting", "Finance", "Administration"] as const;
 
 export function moduleActions(m: ModuleKey): readonly string[] { return MODULES[m].actions; }
 export function isModule(m: string): m is ModuleKey { return m in MODULES; }
@@ -40,6 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { module: "tenders", href: "/tenders", label: "Tenders", section: "main" },
   { module: "lost_analysis", href: "/lost-analysis", label: "Loss Analysis", section: "main" },
   { module: "projects", href: "/projects", label: "Projects", section: "main" },
+  { module: "procurement", href: "/procurement", label: "Procurement", section: "main" },
   { module: "ops_map", href: "/map", label: "Live Ops Map", section: "main" },
   { module: "subcontractors", href: "/subcontractors", label: "Subcontractors", section: "main" },
   { module: "invoices", href: "/invoices", label: "Invoices", section: "main" },
@@ -49,6 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
   { module: "roles", href: "/admin/roles", label: "Roles", section: "admin" },
   { module: "approval_setup", href: "/admin/approval-workflows", label: "Approval workflows", section: "admin" },
   { module: "audit", href: "/admin/audit", label: "Audit log", section: "admin" },
+  { module: "settings", href: "/admin/email-outbox", label: "Email outbox", section: "admin" },
   { module: "settings", href: "/settings", label: "Settings", section: "admin" },
 ];
 

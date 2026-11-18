@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, type AuthUser } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { entityOfClient } from "@/lib/entities";
 import { generateTempPassword, hashPassword } from "@/lib/password";
 import { passwordPolicyError } from "@/lib/permissions";
 import { ensureClientSlug, insertClientUser, isClientRole, isClientSlugTaken } from "@/lib/client-portal-core";
@@ -25,13 +27,15 @@ async function run(fn: () => Promise<CredResult>): Promise<CredResult> {
   }
 }
 
-function clientOrThrow(clientId: number) {
+function clientOrThrow(clientId: number, who: AuthUser) {
   const c = getDb().prepare("SELECT id, name, portal_slug, portal_enabled FROM clients WHERE id = ?").get(clientId) as { id: number; name: string; portal_slug: string | null; portal_enabled: number } | undefined;
   if (!c) throw new Error("Client not found");
+  assertUserEntity(who, entityOfClient(clientId), "Client"); // country access
   return c;
 }
 /** The client user must belong to the given client (never trust the user id alone). */
-function userOrThrow(clientId: number, userId: number) {
+function userOrThrow(clientId: number, userId: number, who: AuthUser) {
+  assertUserEntity(who, entityOfClient(clientId), "Portal user");
   const u = getDb().prepare("SELECT * FROM client_users WHERE id = ? AND client_id = ?").get(userId, clientId) as { id: number; name: string; email: string; status: string; last_login_at: string | null; role: string } | undefined;
   if (!u) throw new Error("Portal user not found");
   return u;
@@ -50,7 +54,7 @@ export async function createClientUser(_prev: CredResult, form: FormData): Promi
   return run(async () => {
     const me = await requirePermission("clients", "portal");
     const clientId = Number(form.get("client_id"));
-    clientOrThrow(clientId);
+    clientOrThrow(clientId, me);
     if (!hasProjects(clientId)) throw new Error("This client has no projects yet: the portal needs at least one project.");
     const name = str(form, "name"), email = str(form, "email").toLowerCase(), role = str(form, "role");
     if (!name) throw new Error("Name is required");
@@ -76,8 +80,8 @@ export async function resetClientUserPassword(_prev: CredResult, form: FormData)
   return run(async () => {
     const me = await requirePermission("clients", "portal");
     const clientId = Number(form.get("client_id"));
-    clientOrThrow(clientId);
-    const u = userOrThrow(clientId, Number(form.get("user_id")));
+    clientOrThrow(clientId, me);
+    const u = userOrThrow(clientId, Number(form.get("user_id")), me);
     const password = generateTempPassword();
     getDb().prepare("UPDATE client_users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, password_changed_at = NULL WHERE id = ?").run(hashPassword(password), u.id);
     revokeClientSessions(u.id);
@@ -91,7 +95,7 @@ export async function updateClientUser(form: FormData): Promise<ActionResult> {
   return guard(async () => {
     const me = await requirePermission("clients", "portal");
     const clientId = Number(form.get("client_id"));
-    const u = userOrThrow(clientId, Number(form.get("user_id")));
+    const u = userOrThrow(clientId, Number(form.get("user_id")), me);
     const name = str(form, "name"), role = str(form, "role");
     if (!name) throw new Error("Name is required");
     if (!isClientRole(role)) throw new Error("Choose a role");
@@ -105,7 +109,7 @@ export async function updateClientUser(form: FormData): Promise<ActionResult> {
 export async function setClientUserStatus(form: FormData): Promise<void> {
   const me = await requirePermission("clients", "portal");
   const clientId = Number(form.get("client_id"));
-  const u = userOrThrow(clientId, Number(form.get("user_id")));
+  const u = userOrThrow(clientId, Number(form.get("user_id")), me);
   const enable = str(form, "enable") === "1";
   getDb().prepare("UPDATE client_users SET status = ? WHERE id = ?").run(enable ? "active" : "disabled", u.id);
   if (!enable) revokeClientSessions(u.id);
@@ -116,7 +120,7 @@ export async function setClientUserStatus(form: FormData): Promise<void> {
 export async function unlockClientUser(form: FormData): Promise<void> {
   const me = await requirePermission("clients", "portal");
   const clientId = Number(form.get("client_id"));
-  const u = userOrThrow(clientId, Number(form.get("user_id")));
+  const u = userOrThrow(clientId, Number(form.get("user_id")), me);
   getDb().prepare("UPDATE client_users SET failed_attempts = 0, locked_until = NULL WHERE id = ?").run(u.id);
   await logClientEvent("user_unlocked", { clientId, userId: u.id, email: u.email, detail: `Unlocked by ${me.name}` });
   refresh(clientId);
@@ -125,7 +129,7 @@ export async function unlockClientUser(form: FormData): Promise<void> {
 export async function signOutClientUser(form: FormData): Promise<void> {
   const me = await requirePermission("clients", "portal");
   const clientId = Number(form.get("client_id"));
-  const u = userOrThrow(clientId, Number(form.get("user_id")));
+  const u = userOrThrow(clientId, Number(form.get("user_id")), me);
   const n = revokeClientSessions(u.id);
   await logClientEvent("session_revoked", { clientId, userId: u.id, email: u.email, detail: `${n} session(s) signed out by ${me.name}` });
   refresh(clientId);
@@ -134,7 +138,7 @@ export async function signOutClientUser(form: FormData): Promise<void> {
 export async function deleteClientUser(form: FormData): Promise<void> {
   const me = await requirePermission("clients", "portal");
   const clientId = Number(form.get("client_id"));
-  const u = userOrThrow(clientId, Number(form.get("user_id")));
+  const u = userOrThrow(clientId, Number(form.get("user_id")), me);
   if (u.last_login_at) throw new Error("This user has already signed in: disable the account instead of deleting it.");
   getDb().prepare("DELETE FROM client_users WHERE id = ?").run(u.id);
   await logClientEvent("user_deleted", { clientId, email: u.email, detail: `Deleted by ${me.name}` });
@@ -146,7 +150,7 @@ export async function saveClientPortalSettings(form: FormData): Promise<ActionRe
   return guard(async () => {
     const me = await requirePermission("clients", "portal");
     const clientId = Number(form.get("client_id"));
-    const c = clientOrThrow(clientId);
+    const c = clientOrThrow(clientId, me);
     const db = getDb();
     const slugRaw = str(form, "slug").toLowerCase();
     if (slugRaw && slugRaw !== c.portal_slug) {

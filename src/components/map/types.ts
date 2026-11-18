@@ -29,7 +29,7 @@ export interface ProjectMapProps {
   onSave?: (geojson: GeoJSON.FeatureCollection) => void | Promise<void>;
   /** kind assigned to newly drawn shapes (default "project") */
   drawKind?: "project" | "stage";
-  /** [lat, lng] used when there are no features (default Dubai) */
+  /** [lat, lng] used when there are no features (default: the `map_center` setting, else Dubai) */
   center?: [number, number];
   zoom?: number;
   /** px number or css string (default 480) */

@@ -5,6 +5,8 @@ import type { DB } from "../db";
 import type { ApprovalDocType } from "../types";
 import { activeDelegate, applicableLevels, resolveApprovers, selectWorkflow } from "./engine";
 import { REGISTRY } from "./registry";
+import { getRegionProfile } from "../seed-regions";
+import { entityOfAttachmentOwner } from "../entities";
 
 const H = 3_600_000;
 export interface SeedOpts {
@@ -19,25 +21,31 @@ export function seedRequest(db: DB, type: ApprovalDocType, docId: number, o: See
   const doc = REGISTRY[type].getDocument(docId, payload);
   if (!doc) return null;
   const cat = doc.projectId ? (db.prepare("SELECT category FROM projects WHERE id = ?").get(doc.projectId) as { category: string | null } | undefined)?.category ?? null : null;
-  const wf = selectWorkflow(type, { amount: doc.amount, departmentId: doc.departmentId, projectCategory: cat });
+  const entityId = entityOfAttachmentOwner(doc.entity[0], doc.entity[1]) ?? 1;
+  const wf = selectWorkflow(type, { amount: doc.amount, departmentId: doc.departmentId, projectCategory: cat, entityId });
   if (!wf) return null;
   const lv = applicableLevels(wf.id, doc.amount);
   if (!lv.length) return null;
   const stop = o.outcome === "approved" ? lv.length - 1 : Math.min(Math.max(o.atLevel ?? 1, 1), lv.length) - 1;
   const t0 = Date.now() - o.hoursAgo * H;
   const iso = (ms: number) => new Date(ms).toISOString();
-  const ctx = { requesterId: o.requestedBy, departmentId: doc.departmentId, projectId: doc.projectId };
+  const ctx = { requesterId: o.requestedBy, departmentId: doc.departmentId, projectId: doc.projectId, entityId };
 
   // plan the tasks first so nothing is inserted when a level cannot be resolved
+  const entry = REGISTRY[type];
+  const barred = entry.excludedApprovers?.(docId) ?? [];
+  const admins = (db.prepare("SELECT u.id FROM users u JOIN roles ro ON ro.id = u.role_id WHERE ro.code = 'super_admin' AND u.status = 'active' ORDER BY u.id").all() as { id: number }[]).map((x) => x.id);
   const plan = lv.slice(0, stop + 1).map((l, i) => {
     let ids = resolveApprovers(l, ctx);
     if (!l.allow_self_approval && o.requestedBy) ids = ids.filter((u) => u !== o.requestedBy);
+    ids = ids.filter((u) => !barred.includes(u));
+    if (!ids.length && entry.escalateFirstLevel) ids = admins.filter((u) => !barred.includes(u)); // same fallback as the engine (supplier tenders)
     return { l, ids, created: t0 + i * (o.outcome === "pending" ? Math.min(o.hoursAgo / (stop + 1), 20) : 20) * H };
   });
   if (plan.some((p) => p.ids.length === 0)) return null;
 
-  const reqId = Number(db.prepare(`INSERT INTO approval_requests(document_type, document_id, document_ref, title, amount, workflow_id, current_level, status, requested_by, requested_at, completed_at, note, levels_json, payload)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(type, docId, doc.ref, doc.title, doc.amount, wf.id, lv[stop].level_no, o.outcome, o.requestedBy, iso(t0), null, o.note ?? null, JSON.stringify(lv), JSON.stringify(payload)).lastInsertRowid);
+  const reqId = Number(db.prepare(`INSERT INTO approval_requests(document_type, document_id, document_ref, title, amount, workflow_id, current_level, status, requested_by, requested_at, completed_at, note, levels_json, payload, entity_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(type, docId, doc.ref, doc.title, doc.amount, wf.id, lv[stop].level_no, o.outcome, o.requestedBy, iso(t0), null, o.note ?? null, JSON.stringify(lv), JSON.stringify(payload), entityId).lastInsertRowid);
   const ev = (level: number | null, event: string, user: number | null, comment: string | null, at: number) =>
     db.prepare("INSERT INTO approval_events(request_id, level_no, event, user_id, comment, created_at) VALUES (?,?,?,?,?,?)").run(reqId, level, event, user, comment, iso(at));
   const nm = (id: number) => (db.prepare("SELECT name FROM users WHERE id = ?").get(id) as { name: string }).name;
@@ -82,23 +90,25 @@ export function seedRequest(db: DB, type: ApprovalDocType, docId: number, o: See
 }
 
 /** Seeds the demo delegation and request history on top of the already seeded documents. */
-export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imran: number; mariam: number; rahul: number; layla: number; omar: number; hamdan: number }): void {
+/** `entityId`: only the documents of this country are seeded (the first region also gets the out-of-office delegation). */
+export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imran: number; mariam: number; rahul: number; layla: number; omar: number; hamdan: number }, entityId: number): void {
+  const P = getRegionProfile();
   const all = <T = any>(sql: string, ...a: unknown[]) => db.prepare(sql).all(...(a as any[])) as T[];
   const today = new Date().toISOString().slice(0, 10);
   const plus = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
   // Technical head Sara is out of office: new tasks of hers go to Daniel.
-  db.prepare("INSERT INTO approval_delegations(user_id, delegate_user_id, start_date, end_date, document_types, is_active) VALUES (?,?,?,?,NULL,1)").run(u.sara, u.daniel, plus(-3), plus(10));
+  if (!(db.prepare("SELECT COUNT(*) c FROM approval_delegations").get() as { c: number }).c) db.prepare("INSERT INTO approval_delegations(user_id, delegate_user_id, start_date, end_date, document_types, is_active) VALUES (?,?,?,?,NULL,1)").run(u.sara, u.daniel, plus(-3), plus(10));
   void today;
   const pm = (pid: number) => (db.prepare("SELECT manager_id m FROM projects WHERE id = ?").get(pid) as { m: number | null }).m;
 
   // ---- tenders: pending / approved submission approvals, award + revision history
-  for (const t of all("SELECT id, status, owner_id, project_id, won_value, current_revision_id FROM tenders ORDER BY id")) {
+  for (const t of all("SELECT id, status, owner_id, project_id, won_value, current_revision_id FROM tenders WHERE entity_id = ? ORDER BY id", entityId)) {
     if (t.status === "under_review") seedRequest(db, "tender_submission", t.id, { requestedBy: t.owner_id, hoursAgo: 20, outcome: "pending", atLevel: 1, note: "All department sections completed." });
     else if (["approved", "submitted", "negotiation", "won", "lost"].includes(t.status)) seedRequest(db, "tender_submission", t.id, { requestedBy: t.owner_id, hoursAgo: 24 * 40, outcome: "approved" });
     if (t.status === "won") seedRequest(db, "tender_award", t.id, { requestedBy: u.omar, hoursAgo: 24 * 25, outcome: "approved", payload: { won_value: t.won_value } });
     // awards of 20M and above wait for the general manager (level 2)
     // (only the negotiation tender: a pending award hides Mark Won / Mark Lost, and the e2e flow marks the newest open tender lost)
-    if (t.status === "negotiation") seedRequest(db, "tender_award", t.id, { requestedBy: u.rahul, hoursAgo: t.status === "negotiation" ? 70 : 30, outcome: "pending", atLevel: 2, note: "Client confirmed intent to award; GM sign-off needed (value above 20M)." });
+    if (t.status === "negotiation") seedRequest(db, "tender_award", t.id, { requestedBy: u.rahul, hoursAgo: t.status === "negotiation" ? 70 : 30, outcome: "pending", atLevel: 2, note: P.approvals.awardNote });
     if (["negotiation", "won", "lost"].includes(t.status)) {
       const rev = db.prepare("SELECT id FROM tender_revisions WHERE tender_id = ? AND rev_no = 1 AND status IN ('submitted','final','superseded')").get(t.id) as { id: number } | undefined;
       if (rev) seedRequest(db, "tender_revision", rev.id, { requestedBy: t.owner_id, hoursAgo: 24 * 18, outcome: "approved" });
@@ -107,17 +117,17 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
     }
   }
   // one returned history item: a submitted tender whose first submission was returned before approval
-  const returned = all("SELECT id, owner_id FROM tenders WHERE status = 'submitted' ORDER BY id LIMIT 1")[0];
+  const returned = all("SELECT id, owner_id FROM tenders WHERE entity_id = ? AND status = 'submitted' ORDER BY id LIMIT 1", entityId)[0];
   if (returned) seedRequest(db, "tender_submission", returned.id, { requestedBy: returned.owner_id, hoursAgo: 24 * 47, outcome: "returned", atLevel: 2, comment: "Cash-flow assumptions need a 60-day payment cycle; revisit contingency before resubmitting." });
 
   // ---- loss analyses
-  for (const l of all("SELECT id, status FROM loss_analyses ORDER BY id")) {
+  for (const l of all("SELECT l.id, l.status FROM loss_analyses l JOIN tenders t ON t.id = l.tender_id WHERE t.entity_id = ? ORDER BY l.id", entityId)) {
     if (l.status === "closed") seedRequest(db, "loss_analysis", l.id, { requestedBy: u.rahul, hoursAgo: 24 * 12, outcome: "approved" });
     else if (l.status === "in_review") seedRequest(db, "loss_analysis", l.id, { requestedBy: u.rahul, hoursAgo: 30, outcome: "pending", atLevel: 1 });
   }
 
   // ---- subcontractors
-  for (const s of all("SELECT id, status FROM subcontractors ORDER BY id")) {
+  for (const s of all("SELECT id, status FROM subcontractors WHERE entity_id = ? ORDER BY id", entityId)) {
     const open = (db.prepare("SELECT COUNT(*) c FROM onboarding_checklist WHERE subcontractor_id = ? AND done = 0").get(s.id) as { c: number }).c;
     if (s.status === "approved" || s.status === "suspended") seedRequest(db, "subcontractor_onboarding", s.id, { requestedBy: u.layla, hoursAgo: 24 * 120, outcome: "approved" });
     else if (s.status === "onboarding" && open === 0) seedRequest(db, "subcontractor_onboarding", s.id, { requestedBy: u.layla, hoursAgo: 80, outcome: "pending", atLevel: 2 });
@@ -125,7 +135,7 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
 
   // ---- assignments
   let n = 0;
-  for (const a of all("SELECT id, project_id, status FROM assignments ORDER BY id")) {
+  for (const a of all("SELECT a.id, a.project_id, a.status FROM assignments a JOIN projects p ON p.id = a.project_id WHERE p.entity_id = ? ORDER BY a.id", entityId)) {
     if (a.status === "draft") seedRequest(db, "subcontract_award", a.id, { requestedBy: pm(a.project_id) === u.omar ? u.layla : u.omar, hoursAgo: n++ % 2 === 0 ? 3 : 90, outcome: "pending", atLevel: 1, note: "Awaiting award sign-off." });
     else if (n < 9 && ["active", "completed"].includes(a.status)) { seedRequest(db, "subcontract_award", a.id, { requestedBy: pm(a.project_id) === u.layla ? u.omar : u.layla, hoursAgo: 24 * 90, outcome: "approved" }); n++; }
   }
@@ -133,7 +143,7 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
   // ---- invoices
   const finance = [u.imran, u.mariam];
   let k = 0, payPending = 0, payDone = 0, retSeeded = false;
-  for (const i of all("SELECT id, status, project_id FROM sub_invoices ORDER BY id")) {
+  for (const i of all("SELECT i.id, i.status, i.project_id FROM sub_invoices i JOIN projects p ON p.id = i.project_id WHERE p.entity_id = ? ORDER BY i.id", entityId)) {
     const by = finance[k++ % 2];
     if (i.status === "certified") {
       const slow = k % 3 === 0;
@@ -154,17 +164,17 @@ export function seedApprovalDemo(db: DB, u: { sara: number; daniel: number; imra
 
   // ---- completion certificates
   let c = 0;
-  for (const x of all("SELECT id, status, project_id FROM completion_certificates ORDER BY id")) {
+  for (const x of all("SELECT c.id, c.status, c.project_id FROM completion_certificates c JOIN projects p ON p.id = c.project_id WHERE p.entity_id = ? ORDER BY c.id", entityId)) {
     if (x.status === "issued" && c < 5) { seedRequest(db, "completion_certificate", x.id, { requestedBy: u.rahul, hoursAgo: 24 * 70, outcome: "approved" }); c++; }
     else if (x.status === "rejected") seedRequest(db, "completion_certificate", x.id, { requestedBy: u.omar, hoursAgo: 24 * 21, outcome: "rejected", atLevel: 1, comment: "Snag items outstanding." });
   }
 
   // ---- manual costs above the threshold (pending)
-  const open = all("SELECT id FROM projects WHERE status IN ('active','mobilizing') ORDER BY id");
+  const open = all("SELECT id FROM projects WHERE entity_id = ? AND status IN ('active','mobilizing') ORDER BY id", entityId);
   const projects = [open[0], open.find((p) => pm(p.id) === u.omar) ?? open[1]];
   projects.forEach((p, idx) => {
     const rid = Number(db.prepare("INSERT INTO project_cost_requests(project_id, category, description, amount, cost_date, created_by, status) VALUES (?,?,?,?,?,?, 'pending')")
-      .run(p.id, idx === 0 ? "equipment" : "overhead", idx === 0 ? "Emergency crane hire for bridge girder lift" : "Site establishment extension (temporary offices)", idx === 0 ? 86_000 : 64_500, today, pm(p.id) === u.omar ? u.layla : u.omar).lastInsertRowid);
+      .run(p.id, P.approvals.costRequests[idx].category, P.approvals.costRequests[idx].description, P.approvals.costRequests[idx].amount, today, pm(p.id) === u.omar ? u.layla : u.omar).lastInsertRowid);
     seedRequest(db, "project_cost", rid, { requestedBy: pm(p.id) === u.omar ? u.layla : u.omar, hoursAgo: idx === 0 ? 70 : 5, outcome: "pending", atLevel: idx === 0 ? 2 : 1 });
   });
 }

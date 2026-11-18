@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db";
+import { userInEntitySql } from "@/lib/entities";
 import { OPEN_TENDER_STATUSES } from "@/lib/status";
 import { daysUntil } from "@/lib/format";
 import type {
@@ -21,8 +22,8 @@ function withValue(rows: Omit<TenderRow, "value">[]): TenderRow[] {
   return rows.map((r) => ({ ...r, value: r.status === "won" && r.won_value ? r.won_value : r.rev_price > 0 ? r.rev_price : r.estimated_value ?? 0 }));
 }
 
-export function listTenders(f: TenderFilters = {}): TenderRow[] {
-  const where: string[] = []; const args: (string | number)[] = [];
+export function listTenders(entityId: number, f: TenderFilters = {}): TenderRow[] {
+  const where: string[] = ["t.entity_id = ?"]; const args: (string | number)[] = [entityId];
   if (f.status) { where.push("t.status = ?"); args.push(f.status); }
   if (f.category) { where.push("t.category = ?"); args.push(f.category); }
   if (f.client) { where.push("t.client_id = ?"); args.push(Number(f.client)); }
@@ -39,8 +40,8 @@ export interface TenderKpis {
   openCount: number; openValue: number; submittedCount: number; submittedValue: number;
   won: number; lost: number; wonValue: number; lostValue: number; winRateCount: number | null; winRateValue: number | null; due7: number;
 }
-export function tenderKpis(): TenderKpis {
-  const rows = listTenders();
+export function tenderKpis(entityId: number): TenderKpis {
+  const rows = listTenders(entityId);
   const open = rows.filter((r) => (OPEN_TENDER_STATUSES as readonly string[]).includes(r.status));
   const sub = rows.filter((r) => r.status === "submitted" || r.status === "negotiation");
   const won = rows.filter((r) => r.status === "won"); const lost = rows.filter((r) => r.status === "lost");
@@ -56,11 +57,12 @@ export function tenderKpis(): TenderKpis {
   };
 }
 
-export function lookups(): { clients: Client[]; users: User[]; departments: Department[] } {
+/** Lookup lists for forms of one country: its clients and the users who may work in it. */
+export function lookups(entityId: number): { clients: Client[]; users: User[]; departments: Department[] } {
   const db = getDb();
   return {
-    clients: db.prepare("SELECT * FROM clients ORDER BY name").all() as Client[],
-    users: db.prepare("SELECT * FROM users ORDER BY name").all() as User[],
+    clients: db.prepare("SELECT * FROM clients WHERE entity_id = ? ORDER BY name").all(entityId) as Client[],
+    users: db.prepare(`SELECT u.* FROM users u WHERE ${userInEntitySql("u")} ORDER BY u.name`).all(entityId) as User[],
     departments: db.prepare("SELECT * FROM departments ORDER BY name").all() as Department[],
   };
 }

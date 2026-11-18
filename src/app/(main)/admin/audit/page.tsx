@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
 
-const EVENTS = ["login_success", "login_failed", "logout", "locked", "password_changed", "password_reset", "session_revoked", "user_created", "user_disabled", "user_enabled", "user_unlocked", "user_updated", "role_changed", "permissions_changed"];
+const EVENTS = ["login_success", "login_failed", "logout", "locked", "password_changed", "password_reset", "session_revoked", "user_created", "user_disabled", "user_enabled", "user_unlocked", "user_updated", "role_changed", "permissions_changed", "entity_switched", "entity_updated", "fx_updated"];
 type SP = { user?: string; event?: string; from?: string; to?: string; source?: string };
 
 export default async function AuditPage({ searchParams }: { searchParams: Promise<SP> }) {

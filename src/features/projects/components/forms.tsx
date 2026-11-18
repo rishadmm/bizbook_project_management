@@ -134,8 +134,8 @@ export function SubProjectForm({ parentId, users, unit, today }: { parentId: num
   );
 }
 
-export function InvoiceForm({ projectId, assignments, today, boq }: { projectId: number; assignments: Opt[]; today: string; boq: Record<number, BoqItem[]> }) {
-  return <RecordInvoiceForm projectId={projectId} assignments={assignments.map((a) => ({ value: Number(a.value), label: a.label }))} today={today} boq={boq} />;
+export function InvoiceForm({ projectId, assignments, today, boq, currency, vatRate }: { projectId: number; assignments: Opt[]; today: string; boq: Record<number, BoqItem[]>; currency: string; vatRate: number }) {
+  return <RecordInvoiceForm projectId={projectId} assignments={assignments.map((a) => ({ value: Number(a.value), label: a.label }))} today={today} boq={boq} currency={currency} vatRate={vatRate} />;
 }
 
 export function CertificateForm({ projectId, assignments, today }: { projectId: number; assignments: Opt[]; today: string }) {

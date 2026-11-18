@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { can, getSession, parseDbDate, requirePage } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
-import { getUserRow, listAudit, lookups, rolePermissionKeys, userOverrides, userSessions } from "@/features/admin/queries";
+import { getUserRow, listAudit, lookups, rolePermissionKeys, userEntityAccess, userOverrides, userSessions } from "@/features/admin/queries";
 import { setUserStatus, revokeUserSessions } from "@/features/admin/actions";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { CardSection } from "@/components/ui/Card";
@@ -38,7 +38,7 @@ export default async function UserDetailPage({ params, searchParams }: { params:
         <div className="space-y-5">
           <CardSection title="Profile">
             {canEdit
-              ? <UserForm mode="edit" values={{ id: u.id, name: u.name, email: u.email, department_id: u.department_id, role_id: u.role_id, job_title: u.job_title, phone: u.phone, manager_id: u.manager_id }} departments={lk.departments.map((d) => ({ value: d.id, label: d.name }))}
+              ? <UserForm mode="edit" values={{ id: u.id, name: u.name, email: u.email, department_id: u.department_id, role_id: u.role_id, job_title: u.job_title, phone: u.phone, manager_id: u.manager_id, entity_ids: userEntityAccess(u.id).ids, default_entity_id: userEntityAccess(u.id).defaultId }} entities={lk.entities.map((e) => ({ id: e.id, label: e.country, flag: e.flag }))} departments={lk.departments.map((d) => ({ value: d.id, label: d.name }))}
                   roles={lk.roles.filter((r) => r.code !== "super_admin" || me.isSuperAdmin).map((r) => ({ value: r.id, label: r.name }))} users={lk.users.map((x) => ({ value: x.id, label: x.name }))} />
               : <p className="text-sm text-slate-500">You do not have permission to edit this user.</p>}
           </CardSection>

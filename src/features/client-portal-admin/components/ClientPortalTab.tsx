@@ -2,7 +2,7 @@ import { Eye, Pencil, RotateCcw, Trash2, UserPlus } from "lucide-react";
 import { Badge, Button, CardSection, EmptyState, ModalButton, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
 import ConfirmButton from "@/features/projects/components/ConfirmButton";
 import { formatDateTime } from "@/lib/format";
-import { getSetting } from "@/lib/db";
+import { getEntityById, entityOfClient } from "@/lib/entities";
 import { clientRoleLabel } from "@/lib/client-portal-core";
 import { requestOrigin } from "@/lib/portal-auth";
 import { deleteClientUser, setClientUserStatus, signOutClientUser, unlockClientUser } from "../actions";
@@ -24,7 +24,7 @@ interface Cli { id: number; name: string; portal_slug: string | null; portal_ena
 export default async function ClientPortalTab({ client, canManage, canViewAs }: { client: Cli; canManage: boolean; canViewAs: boolean }) {
   const projects = getClientProjectsLite(client.id);
   const origin = await requestOrigin();
-  const tenant = getSetting("company_name", "Al Noor Infrastructure LLC");
+  const tenant = getEntityById(entityOfClient(client.id))?.legal_name ?? "";
   if (projects.length === 0) {
     return (
       <div data-testid="portal-access"><EmptyState title="The client portal needs at least one project" description="Client users see the progress, map and reports of this client's projects. Create or convert a project for this client first, then come back to set up the portal." /></div>

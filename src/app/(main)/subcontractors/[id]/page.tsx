@@ -22,6 +22,13 @@ import PortalAccessTab from "@/features/portal-admin/components/PortalAccessTab"
 import { pendingDocumentCount } from "@/features/portal-admin/queries";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 import { hasOpenRequest } from "@/lib/approvals/engine";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import { getProfile } from "@/features/supplier-registration/core";
+import { REGISTRATION_STATUSES, REVIEW_SECTIONS, isRegistrationStatus } from "@/lib/registration";
+import { sectionRows } from "@/features/supplier-registration/components/summary";
+import { getDb } from "@/lib/db";
+import EntityBar from "@/components/shell/EntityBar";
 
 export default async function SubcontractorPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const me = await requirePage("subcontractors");
@@ -29,13 +36,17 @@ export default async function SubcontractorPage({ params, searchParams }: { para
   const id = Number(rawId);
   const sub = Number.isInteger(id) ? getSubcontractor(id) : undefined;
   if (!sub) notFound();
+  const rec = await assertRecordAccess(sub.entity_id);
   const checklist = getChecklist(id);
   const docs = getDocuments(id);
   const assignments = getSubAssignments(id);
   const invoices = getSubInvoices(id);
   const certs = getSubCertificates(id);
+  const reg = getProfile(getDb(), id);
+  const regName = new Map((getDb().prepare("SELECT code, name FROM registration_doc_types WHERE entity_id = ?").all(sub.entity_id) as { code: string; name: string }[]).map((r) => [r.code, r.name]));
   const tabs = [
     { key: "profile", label: "Profile" },
+    { key: "registration", label: "Registration", count: reg && ["submitted", "referred_back"].includes(reg.sub.registration_status) ? 1 : undefined },
     { key: "onboarding", label: "Onboarding", count: checklist.filter((c) => !c.done).length || undefined },
     { key: "documents", label: "Documents", count: docs.length },
     { key: "assignments", label: "Assignments", count: assignments.length },
@@ -50,7 +61,8 @@ export default async function SubcontractorPage({ params, searchParams }: { para
   const perf = getSubcontractorPerformance(id)[0];
 
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="subcontractor" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader title={sub.name} breadcrumbs={[{ label: "Subcontractors", href: "/subcontractors" }, { label: sub.code ?? `#${id}` }]}
         description={[sub.code, sub.trade].filter(Boolean).join(" · ")}
         badges={<StatusBadge kind="subcontractorStatus" value={sub.status} />}
@@ -73,6 +85,20 @@ export default async function SubcontractorPage({ params, searchParams }: { para
       <Tabs tabs={tabs} active={tab} basePath={base} />
 
       {tab === "profile" && <CardSection title="Profile"><ProfileForm action={updateSubcontractor} sub={sub} submitLabel="Save profile" /></CardSection>}
+
+      {tab === "registration" && reg && (
+        <CardSection title="Supplier registration" subtitle={reg.sub.registration_no ?? "Not yet submitted by the supplier"}
+          actions={<><Badge tone={isRegistrationStatus(reg.sub.registration_status) ? REGISTRATION_STATUSES[reg.sub.registration_status].tone : "slate"}>{isRegistrationStatus(reg.sub.registration_status) ? REGISTRATION_STATUSES[reg.sub.registration_status].label : reg.sub.registration_status}</Badge>
+            <Link href={`/subcontractors/${id}/registration`} data-testid="open-review" className="rounded-[10px] bg-primary px-3 py-1.5 text-xs font-bold text-white shadow-brand-sm hover:bg-primary-dark">Open review page</Link></>}>
+          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
+            {[["Prequalification", reg.sub.prequal_grade ? `Grade ${reg.sub.prequal_grade} until ${formatDate(reg.sub.prequal_valid_until)}` : "—"], ["Submitted", formatDate(reg.sub.submitted_at?.slice(0, 10))], ["Resubmissions", String(reg.sub.resubmit_count)],
+              ...sectionRows(reg, "categories"), ...sectionRows(reg, "hse").slice(0, 2)].map(([k, v]) => (
+              <div key={k}><dt className="text-[11px] font-bold uppercase tracking-wider text-muted">{k}</dt><dd className="break-words font-semibold text-dark">{v}</dd></div>
+            ))}
+          </dl>
+          <p className="mt-4 text-xs text-slate-400">Sections: {REVIEW_SECTIONS.map((s) => s.label).join(" · ")}. Open the review page to accept, query, refer back, approve or reject.</p>
+        </CardSection>
+      )}
 
       {tab === "onboarding" && (
         <CardSection title="Onboarding checklist" subtitle={`${checklist.filter((c) => c.done).length} of ${checklist.length} completed`}
@@ -118,7 +144,7 @@ export default async function SubcontractorPage({ params, searchParams }: { para
                   const w = docWarning(d.expiry_date, d.status);
                   return (
                     <TR key={d.id}>
-                      <TD>{statusLabel("docType", d.doc_type)}{d.source === "portal" && <Badge tone="violet" className="ml-1.5">Portal</Badge>}{d.uploaded_by_name && <div className="text-[11px] text-slate-400">by {d.uploaded_by_name}</div>}</TD>
+                      <TD>{d.doc_type_code ? regName.get(d.doc_type_code) ?? statusLabel("docType", d.doc_type) : statusLabel("docType", d.doc_type)}{(d.version ?? 1) > 1 && <span className="ml-1 text-[11px] font-bold text-slate-400">v{d.version}</span>}{d.is_current === 0 && <Badge tone="slate" className="ml-1.5">Superseded</Badge>}{d.source === "portal" && <Badge tone="violet" className="ml-1.5">Portal</Badge>}{d.uploaded_by_name && <div className="text-[11px] text-slate-400">by {d.uploaded_by_name}</div>}</TD>
                       <TD>{d.ref_no ?? "—"}</TD>
                       <TD>{formatDate(d.issue_date)}</TD>
                       <TD>{formatDate(d.expiry_date)} {w === "expired" && <Badge tone="red">expired</Badge>}{w === "expiring" && <Badge tone="amber">expiring</Badge>}</TD>
@@ -216,6 +242,6 @@ export default async function SubcontractorPage({ params, searchParams }: { para
       )}
 
       {tab === "activity" && <ActivityTimeline entityType="subcontractor" entityId={id} />}
-    </>
+    </CurrencyProvider>
   );
 }

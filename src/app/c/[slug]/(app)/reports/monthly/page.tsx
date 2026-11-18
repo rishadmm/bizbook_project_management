@@ -18,7 +18,7 @@ export default async function MonthlyReportPage({ params, searchParams }: { para
   const r = monthlyReport(s, sp.project, sp.month);
   const qs = new URLSearchParams({ report: "monthly", month: r.month, ...(sp.project ? { project: sp.project } : {}) });
   return (
-    <ReportFrame slug={slug} title="Monthly progress summary" subtitle={r.label} clientName={s.client.name} csvHref={`/c/${slug}/reports/export?${qs}`}
+    <ReportFrame slug={slug} title="Monthly progress summary" subtitle={r.label} clientName={s.client.name} tenant={s.entity.legal_name} csvHref={`/c/${slug}/reports/export?${qs}`}
       controls={<><SelectParam name="project" label="Project" value={sp.project ?? ""} options={v.projects.map((p) => ({ value: String(p.id), label: `${p.code} · ${p.name}` }))} all="All projects" /><DateParam name="month" label="Month" type="month" value={r.month} max={v.today.slice(0, 7)} /></>}>
       {r.items.length === 0 && <EmptyState title="No projects to report" />}
       {r.items.map((it) => (

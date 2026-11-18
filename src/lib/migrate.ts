@@ -1,17 +1,20 @@
 import bcrypt from "bcryptjs";
 import type { DB } from "./db";
 import { LEGACY_ROLE_MAP, SYSTEM_ROLES } from "./role-defaults";
-import { installDefaultWorkflows } from "./approvals/defaults";
+import { installDefaultWorkflows, installRfxWorkflows } from "./approvals/defaults";
 import { addDays } from "./format";
 import { uniqueSlug } from "./portal-core";
 import { uniqueClientSlug } from "./client-portal-core";
+import { FX_TABLES, fxFillSql, fxTriggerSql, usdColumn, usdDdl } from "./fx-tables";
+import { DEFAULT_CATEGORIES, DEFAULT_DOC_TYPES } from "./registration";
 
 export const DEMO_ADMIN_EMAIL = "admin@alnoor.demo";
 export const DEMO_ADMIN_PASSWORD = "Admin@12345";
 export const DEMO_USER_PASSWORD = "Password@123";
 
 function columns(db: DB, table: string): string[] {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+  // table_xinfo (not table_info): it also lists generated columns, which table_info hides
+  return (db.prepare(`PRAGMA table_xinfo(${table})`).all() as { name: string }[]).map((c) => c.name);
 }
 function ensureColumn(db: DB, table: string, column: string, ddl: string) {
   if (!columns(db, table).includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
@@ -73,8 +76,11 @@ export function migrate(db: DB): void {
   if (haveUsers && haveRoles && !haveWf) installDefaultWorkflows(db);
 
   migrateInvoices(db);
+  migrateMultiCountry(db);
   migratePortal(db, haveRoles);
   migrateClientPortal(db, haveRoles);
+  migrateProcurement(db, haveRoles);
+  migrateTendering(db);
 
   // One-time backfill: every role that can view projects also gets the Live Ops Map (guarded by a settings flag so a later manual revoke sticks).
   const flag = db.prepare("SELECT value FROM settings WHERE key = 'migr_ops_map_view'").get();
@@ -189,5 +195,170 @@ function migrateClientPortal(db: DB, haveRoles: boolean): void {
       db.prepare(`INSERT OR IGNORE INTO role_permissions(role_id, module, action) SELECT id, 'clients', 'portal' FROM roles WHERE code IN ('admin', 'project_manager')`).run();
       db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_client_portal_perm', '1')").run();
     })();
+  }
+}
+
+/* ------------------------------------------------------------------ multi-country operations + USD reporting layer (MULTI_COUNTRY_SPEC) */
+
+export const CURRENCIES: [code: string, name: string, decimals: number, symbol: string][] = [
+  ["USD", "US dollar", 2, "$"], ["AED", "UAE dirham", 2, "AED"], ["OMR", "Omani rial", 3, "OMR"], ["SAR", "Saudi riyal", 2, "SAR"],
+  ["QAR", "Qatari riyal", 2, "QAR"], ["KWD", "Kuwaiti dinar", 3, "KWD"], ["BHD", "Bahraini dinar", 3, "BHD"],
+];
+/** Central-bank peg rates (USD per 1 unit), effective from the start of the demo history. */
+export const PEG_RATES: [string, number][] = [["USD", 1], ["AED", 0.272294], ["OMR", 2.60078]];
+
+/** Tables whose root rows belong to one country. Child rows inherit through their parent (see fx-tables.ts). */
+const ENTITY_ROOTS = ["clients", "subcontractors", "tenders", "projects", "approval_requests"] as const;
+
+function settingOf(db: DB, key: string): string | undefined {
+  return (db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined)?.value;
+}
+
+/** Inserts the reference currencies, the peg rates and the two country entities (AE = id 1, OM = id 2) when missing. Old per-country settings are only a migration source. */
+export function ensureEntities(db: DB): void {
+  const insCur = db.prepare("INSERT OR IGNORE INTO currencies(code, name, decimals, symbol) VALUES (?,?,?,?)");
+  for (const c of CURRENCIES) insCur.run(...c);
+  const insRate = db.prepare("INSERT OR IGNORE INTO fx_rates(currency, rate_to_usd, effective_date, source) VALUES (?,?,?,?)");
+  for (const [cur, rate] of PEG_RATES) insRate.run(cur, rate, "2020-01-01", cur === "USD" ? "Reporting currency" : "Central bank peg");
+  const ins = db.prepare(`INSERT OR IGNORE INTO entities(code, country, flag, legal_name, short_name, currency, vat_rate, tax_label, tax_no, cr_no, address, phone, email, map_center, timezone, approval_cost_threshold, doc_prefix, status, sort_order)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const company = settingOf(db, "company_name") || "Al Noor Infrastructure LLC";
+  ins.run("AE", "United Arab Emirates", "\u{1F1E6}\u{1F1EA}", company, "UAE", settingOf(db, "currency") || "AED", 5, settingOf(db, "tax_label") || "TRN",
+    settingOf(db, "company_trn") || "100234567800003", null, settingOf(db, "company_address") || "Office 1204, Al Moosa Tower 2, Sheikh Zayed Road, Dubai, United Arab Emirates",
+    null, null, settingOf(db, "map_center") || "25.2048,55.2708", "Asia/Dubai", Number(settingOf(db, "approval_cost_threshold")) || 50000, "", "active", 1);
+  ins.run("OM", "Oman", "\u{1F1F4}\u{1F1F2}", "Al Noor Infrastructure LLC \u2013 Oman Branch", "Oman", "OMR", 5, "VATIN", "OM1100248613", "1248613",
+    "Office 504, Al Khuwair Business Tower, Sultan Qaboos Street, Al Khuwair, Muscat, Sultanate of Oman", null, null, "23.588,58.383", "Asia/Muscat", 5000, "OM-", "active", 2);
+  if (!settingOf(db, "reporting_currency")) db.prepare("INSERT INTO settings(key, value) VALUES ('reporting_currency', 'USD')").run();
+  if (!settingOf(db, "company_name")) db.prepare("INSERT INTO settings(key, value) VALUES ('company_name', 'Al Noor Infrastructure LLC')").run();
+}
+
+/**
+ * Idempotent in-place upgrade of a UAE-only database (SCHEMA_VERSION 8): entities + currencies + fx rates, entity_id on the root tables
+ * (existing rows -> AE), per-user country access (every user -> AE, administrators -> all), currency / fx_rate_usd / fx_date + `<col>_usd` virtual
+ * columns and AFTER INSERT triggers on every money table, and the backfill of those columns from the rows' own dates.
+ */
+export function migrateMultiCountry(db: DB): void {
+  ensureEntities(db);
+  const cols = (t: string) => columns(db, t);
+  // entity_id on the root tables. SQLite cannot add a NOT NULL REFERENCES column with a non-NULL default, so: NOT NULL DEFAULT 1 (= AE, the first entity) without the FK clause.
+  for (const t of ENTITY_ROOTS) {
+    ensureColumn(db, t, "entity_id", "INTEGER NOT NULL DEFAULT 1");
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${t}_entity ON ${t}(entity_id)`);
+  }
+  ensureColumn(db, "approval_workflows", "entity_id", "INTEGER REFERENCES entities(id)"); // NULL = applies to every country
+  ensureColumn(db, "users", "default_entity_id", "INTEGER REFERENCES entities(id)");
+  // Default country of existing approval requests = entity of their project/tender is resolved lazily; the backfill below fixes them.
+  if (!settingOf(db, "migr_multi_country_users")) {
+    db.transaction(() => {
+      const ae = (db.prepare("SELECT id FROM entities WHERE code = 'AE'").get() as { id: number }).id;
+      const all = db.prepare("SELECT id FROM entities ORDER BY id").all() as { id: number }[];
+      const users = db.prepare("SELECT u.id, COALESCE(r.code, u.role) AS role_code FROM users u LEFT JOIN roles r ON r.id = u.role_id").all() as { id: number; role_code: string }[];
+      const insUe = db.prepare("INSERT OR IGNORE INTO user_entities(user_id, entity_id) VALUES (?,?)");
+      for (const u of users) {
+        if (u.role_code === "super_admin" || u.role_code === "admin") for (const e of all) insUe.run(u.id, e.id); else insUe.run(u.id, ae);
+      }
+      db.prepare("UPDATE users SET default_entity_id = ? WHERE default_entity_id IS NULL").run(ae);
+      db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_multi_country_users', '1')").run();
+    })();
+  }
+  // Approval requests inherit the entity of their document's project/tender (existing rows: projects/tenders are AE, so the default 1 already holds).
+
+  // An upgraded database gets the default approval workflows of the Oman entity too (OMR-sized thresholds) once, when workflows already exist.
+  if ((db.prepare("SELECT COUNT(*) c FROM approval_workflows").get() as { c: number }).c > 0) {
+    const om = db.prepare("SELECT id FROM entities WHERE code = 'OM'").get() as { id: number } | undefined;
+    if (om && !settingOf(db, `approval_defaults_installed_${om.id}`)) installDefaultWorkflows(db, null, 0.1, om.id);
+  }
+
+  // USD equivalents: columns, virtual USD columns, triggers, backfill.
+  db.transaction(() => {
+    for (const t of FX_TABLES) {
+      ensureColumn(db, t.table, "currency", "TEXT");
+      ensureColumn(db, t.table, "fx_rate_usd", "REAL");
+      ensureColumn(db, t.table, "fx_date", "TEXT");
+      for (const c of t.money) if (!cols(t.table).includes(usdColumn(c))) db.exec(`ALTER TABLE ${t.table} ADD COLUMN ${usdColumn(c)} ${usdDdl(c, false)}`);
+      for (const c of t.rates ?? []) if (!cols(t.table).includes(usdColumn(c))) db.exec(`ALTER TABLE ${t.table} ADD COLUMN ${usdColumn(c)} ${usdDdl(c, true)}`);
+      db.exec(`DROP TRIGGER IF EXISTS trg_fx_${t.table}`);
+      db.exec(fxTriggerSql(t));
+      for (const sql of fxFillSql(t, t.table, "fx_rate_usd IS NULL")) db.exec(sql);
+    }
+  })();
+}
+
+/* ------------------------------------------------------------------ supplier registration + procurement foundation (SUPPLIER_TENDERING_SPEC Part A, SCHEMA_VERSION 9) */
+
+const SUPPLIER_COLUMNS: [string, string][] = [
+  ["registration_status", "TEXT NOT NULL DEFAULT 'approved'"], ["registration_no", "TEXT"], ["registered_at", "TEXT"], ["submitted_at", "TEXT"], ["reviewed_by", "INTEGER"],
+  ["reviewed_at", "TEXT"], ["review_note", "TEXT"], ["reject_reason", "TEXT"], ["resubmit_count", "INTEGER NOT NULL DEFAULT 0"],
+  ["legal_form", "TEXT"], ["year_established", "INTEGER"], ["employees", "INTEGER"], ["turnover_band", "TEXT"], ["website", "TEXT"], ["cr_no", "TEXT"], ["cr_expiry", "TEXT"],
+  ["vat_no", "TEXT"], ["country_of_registration", "TEXT"], ["regions_served", "TEXT"], ["capacity_note", "TEXT"],
+  ["prequal_grade", "TEXT"], ["prequal_valid_until", "TEXT"], ["account_name", "TEXT"], ["swift", "TEXT"],
+  ["hse_lti_rate", "REAL"], ["hse_has_policy", "INTEGER"], ["iso_9001", "INTEGER NOT NULL DEFAULT 0"], ["iso_14001", "INTEGER NOT NULL DEFAULT 0"], ["iso_45001", "INTEGER NOT NULL DEFAULT 0"],
+  ["icv_score", "REAL"], ["declaration_accepted_at", "TEXT"],
+];
+const DOC_COLUMNS: [string, string][] = [
+  ["doc_type_code", "TEXT"], ["review_status", "TEXT NOT NULL DEFAULT 'pending'"], ["review_comment", "TEXT"], ["reviewed_by", "INTEGER"], ["reviewed_at", "TEXT"],
+  ["version", "INTEGER NOT NULL DEFAULT 1"], ["is_current", "INTEGER NOT NULL DEFAULT 1"],
+];
+
+/** Inserts the supplier trade master list (all countries) and the registration document types of every country. INSERT OR IGNORE: safe to call again, never overwrites edits. */
+export function ensureProcurementReference(db: DB): void {
+  const insCat = db.prepare("INSERT OR IGNORE INTO supplier_categories(entity_id, code, name, group_name, active, sort) VALUES (NULL,?,?,?,1,?)");
+  DEFAULT_CATEGORIES.forEach((c, i) => insCat.run(c.code, c.name, c.group, i + 1));
+  const insDoc = db.prepare("INSERT OR IGNORE INTO registration_doc_types(entity_id, code, name, mandatory, needs_expiry, category_condition, sort, active) VALUES (?,?,?,?,?,?,?,1)");
+  for (const [code, defs] of Object.entries(DEFAULT_DOC_TYPES)) {
+    const e = db.prepare("SELECT id FROM entities WHERE code = ?").get(code) as { id: number } | undefined;
+    if (e) defs.forEach((d, i) => insDoc.run(e.id, d.code, d.name, d.mandatory, d.needs_expiry, d.category_condition, i + 1));
+  }
+}
+
+/**
+ * Idempotent in-place upgrade to SCHEMA_VERSION 9: supplier registration columns on subcontractors / subcontractor_documents (new tables come from schema.sql),
+ * the status backfill (every existing supplier -> approved, prospect / onboarding -> under_review), the trade list and document types, and the permission backfill
+ * (procurement module, subcontractors/setup, role name "Procurement officer").
+ */
+export function migrateProcurement(db: DB, haveRoles: boolean): void {
+  const fresh = !columns(db, "subcontractors").includes("registration_status");
+  for (const [c, ddl] of SUPPLIER_COLUMNS) ensureColumn(db, "subcontractors", c, ddl);
+  for (const [c, ddl] of DOC_COLUMNS) ensureColumn(db, "subcontractor_documents", c, ddl);
+  if (fresh) {
+    db.prepare("UPDATE subcontractors SET registration_status = 'under_review' WHERE status IN ('prospect', 'onboarding')").run();
+    db.prepare("UPDATE subcontractors SET registered_at = created_at WHERE registered_at IS NULL").run();
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sub_regstatus ON subcontractors(entity_id, registration_status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_sdoc_code ON subcontractor_documents(subcontractor_id, doc_type_code, is_current)");
+  // reference data only once (guarded by a flag so that edits / deletions made in Settings stick)
+  if (haveRoles && !settingOf(db, "migr_procurement_ref") && (db.prepare("SELECT COUNT(*) c FROM entities").get() as { c: number }).c > 0) {
+    ensureProcurementReference(db);
+    db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_procurement_ref', '1')").run();
+  }
+  const flag = db.prepare("SELECT value FROM settings WHERE key = 'migr_procurement_perm'").get();
+  if (!flag && haveRoles) {
+    db.transaction(() => {
+      const ins = db.prepare("INSERT OR IGNORE INTO role_permissions(role_id, module, action) SELECT id, ?, ? FROM roles WHERE code = ?");
+      for (const r of SYSTEM_ROLES) {
+        for (const a of r.perms.procurement ?? []) ins.run("procurement", a, r.code);
+        if (r.perms.subcontractors?.includes("setup")) ins.run("subcontractors", "setup", r.code);
+      }
+      db.prepare("UPDATE roles SET name = 'Procurement officer', description = ? WHERE code = 'procurement' AND is_system = 1")
+        .run(SYSTEM_ROLES.find((r) => r.code === "procurement")?.description ?? "");
+      db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_procurement_perm', '1')").run();
+    })();
+  }
+}
+
+/* ------------------------------------------------------------------ supplier tendering (SUPPLIER_TENDERING_SPEC Part B, SCHEMA_VERSION 10) */
+
+/** Idempotent: the tender link on assignments (`source` direct | tender, `rfx_id`, `rfx_bid_id`). The rfx_* tables come from schema.sql, their USD columns from migrateMultiCountry (fx-tables.ts). */
+export function migrateTendering(db: DB): void {
+  ensureColumn(db, "assignments", "source", "TEXT NOT NULL DEFAULT 'direct'");
+  ensureColumn(db, "assignments", "rfx_id", "INTEGER");
+  ensureColumn(db, "assignments", "rfx_bid_id", "INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_asg_rfx ON assignments(rfx_id)");
+  // an existing database already has its default approval workflows: add the supplier tender ones once (group-wide in AED sizes, Oman in OMR sizes). An empty database gets them from the seed.
+  if ((db.prepare("SELECT COUNT(*) c FROM approval_workflows").get() as { c: number }).c > 0 && !settingOf(db, "migr_rfx_workflows")) {
+    installRfxWorkflows(db, 1, null);
+    const om = db.prepare("SELECT id FROM entities WHERE code = 'OM'").get() as { id: number } | undefined;
+    if (om && (db.prepare("SELECT COUNT(*) c FROM approval_workflows WHERE entity_id = ?").get(om.id) as { c: number }).c > 0) installRfxWorkflows(db, 0.1, om.id);
+    db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES ('migr_rfx_workflows', '1')").run();
   }
 }

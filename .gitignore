@@ -44,6 +44,8 @@ next-env.d.ts
 # app data
 /data/
 /uploads/
+/uploads-oman/
+/data/ops-oman.db*
 
 # playwright
 /test-results/

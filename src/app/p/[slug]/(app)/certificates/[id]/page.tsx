@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { Check, Download, FileText, X } from "lucide-react";
 import { Badge, LinkButton, PageHeader, StatusBadge } from "@/components/ui";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { requirePortalUser } from "@/lib/portal-auth";
 import { statusLabel } from "@/lib/status";
@@ -36,8 +36,8 @@ export default async function PortalCertificate({ params }: { params: Promise<{ 
   const log = db.prepare("SELECT action, created_at FROM activity_log WHERE entity_type = 'certificate' AND entity_id = ? ORDER BY id").all(c.id) as { action: string; created_at: string }[];
   const when = (...acts: string[]) => log.find((l) => acts.includes(l.action))?.created_at;
   const issuer = c.issued_by ? (db.prepare("SELECT name FROM users WHERE id = ?").get(c.issued_by) as { name: string } | undefined)?.name : undefined;
-  const company = getSetting("company_name") || "Main contractor";
-  const companyAddr = getSetting("company_address");
+  const company = s.entity.legal_name || "Main contractor";
+  const companyAddr = s.entity.address ?? "";
   const rejected = c.status === "rejected", issued = c.status === "issued";
   const requestedAt = day(when("requested", "created") ?? c.created_at);
   const steps: { label: string; date: string; state: "done" | "current" | "todo" | "bad" }[] = [

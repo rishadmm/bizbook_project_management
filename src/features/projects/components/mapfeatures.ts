@@ -1,6 +1,7 @@
 import type { MapFeature, MapLegendItem } from "@/components/map/types";
 import { RAG_HEX, statusHex, statusLabel, ENUMS, TONE_HEX } from "@/lib/status";
 import { pct } from "@/lib/format";
+import { formatLocal } from "@/lib/rfx";
 import type { ProjectListItem, ProjectRow, StageRowEx } from "../queries";
 import { esc, parseFeatures } from "../geo";
 import { BRAND, MAP_COLORS } from "@/lib/theme";
@@ -9,7 +10,7 @@ export const STAGE_LEGEND: MapLegendItem[] = (["not_started", "in_progress", "de
   .map((k) => ({ label: ENUMS.stageStatus[k].label, color: TONE_HEX[ENUMS.stageStatus[k].tone] }));
 
 export function projectMapFeatures(
-  p: ProjectRow, stages: StageRowEx[], subsByStage: Map<number, string[]>, editable: boolean,
+  p: ProjectRow, stages: StageRowEx[], subsByStage: Map<number, string[]>, editable: boolean, chips?: Map<number, { code: string; status: string; closing_at: string | null }>,
 ): MapFeature[] {
   const out: MapFeature[] = [];
   const withGeom = stages.filter((s) => s.geometry);
@@ -25,7 +26,8 @@ export function projectMapFeatures(
       progressPct: s.progress.actualPct, editable,
       href: `/projects/${p.id}/stages/${s.id}`,
       popupHtml: `<div>${esc(statusLabel("stageStatus", s.status))} · actual <b>${pct(s.progress.actualPct, 0)}</b> vs planned ${pct(s.progress.plannedPct, 0)}</div>` +
-        `<div>${subs.length ? `Subcontractor: ${esc(subs.join(", "))}` : "No subcontractor assigned"}</div>`,
+        `<div>${subs.length ? `Subcontractor: ${esc(subs.join(", "))}` : "No subcontractor assigned"}</div>` +
+        (chips?.get(s.id) ? `<div><b>${chips.get(s.id)!.status === "awarded" ? "Awarded via" : "Out to tender ·"} ${esc(chips.get(s.id)!.code)}</b>${chips.get(s.id)!.closing_at && chips.get(s.id)!.status === "published" ? ` · closes ${esc(formatLocal(chips.get(s.id)!.closing_at, false))}` : ""}</div>` : ""),
     });
   }
   return out;

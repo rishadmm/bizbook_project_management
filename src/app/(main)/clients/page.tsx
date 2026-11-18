@@ -11,15 +11,16 @@ import { listClients } from "@/features/clients/queries";
 import { clientPortalSummary } from "@/features/client-portal-admin/queries";
 import { Badge } from "@/components/ui/Badge";
 import { ClientForm } from "@/features/clients/ClientForm";
-import { can, requirePage } from "@/lib/auth";
+import { can, getActiveEntity, requirePage } from "@/lib/auth";
 
 export default async function ClientsPage() {
   const me = await requirePage("clients");
-  const rows = listClients();
+  const entity = await getActiveEntity();
+  const rows = listClients(entity.id);
   const portal = clientPortalSummary();
   return (
     <>
-      <PageHeader title="Clients" description="Client master: authorities, utilities and private clients."
+      <PageHeader title="Clients" description={`Client master: authorities, utilities and private clients · ${entity.country}.`}
         actions={can(me, "clients", "create") ? <ModalButton label="New client" title="New client" variant="primary" icon={<Plus size={14} />} wide><ClientForm /></ModalButton> : undefined} />
       <CardSection flush>
         {rows.length === 0 ? <div className="p-4"><EmptyState title="No clients yet" /></div> : (

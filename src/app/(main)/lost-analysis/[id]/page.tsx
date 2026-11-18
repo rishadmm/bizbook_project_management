@@ -11,6 +11,9 @@ import { statusOptions } from "@/lib/status";
 import { saveLossAnalysis } from "@/features/lost-analysis/actions";
 import { allUsers, getLoss } from "@/features/lost-analysis/queries";
 import { can, requirePage } from "@/lib/auth";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 
 export default async function LossPage({ params }: { params: Promise<{ id: string }> }) {
@@ -19,9 +22,11 @@ export default async function LossPage({ params }: { params: Promise<{ id: strin
   const id = Number(s);
   const l = Number.isInteger(id) ? getLoss(id) : undefined;
   if (!l) notFound();
-  const users = allUsers();
+  const rec = await assertRecordAccess(l.entity_id);
+  const users = allUsers(l.entity_id);
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="loss analysis" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader title={`Loss analysis - ${l.tender_code}`} breadcrumbs={[{ label: "Loss analysis", href: "/lost-analysis" }, { label: l.tender_code }]}
         badges={<StatusBadge kind="lossStatus" value={l.status} />}
         description={<>{l.tender_title} · <Link href={`/tenders/${l.tender_id}`} className="text-blue-700 hover:underline">open tender</Link></>} />
@@ -60,6 +65,6 @@ export default async function LossPage({ params }: { params: Promise<{ id: strin
           <ActivityTimeline entityType="loss" entityId={l.id} limit={20} />
         </div>
       </div>
-    </>
+    </CurrencyProvider>
   );
 }

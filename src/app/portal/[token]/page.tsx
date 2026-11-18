@@ -11,9 +11,12 @@ import { requestPortalCertificate, submitProgressReport } from "@/features/porta
 import { LineRows } from "@/features/portal/components/LineRows";
 import { SubmitButton } from "@/features/portal/components/SubmitButton";
 import PortalInvoiceForm from "@/features/portal/components/PortalInvoiceForm";
-import { DEFAULT_VAT_RATE } from "@/features/invoices/calc";
+
 import { getAssignmentBoq } from "@/features/invoices/lines";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { getEntityById } from "@/lib/entities";
+import { setRequestCurrency } from "@/lib/request-context";
+import MapCenterInit from "@/components/map/MapCenterInit";
 import { BRAND, MAP_COLORS } from "@/lib/theme";
 
 type SP = { sent?: string; error?: string };
@@ -35,6 +38,8 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
   const ctx = resolvePortal(token);
   if (!ctx) return <Unavailable />;
   const { assignment: a, project, stage, subcontractor } = ctx;
+  const entity = getEntityById(project.entity_id)!;
+  setRequestCurrency(entity.currency); // the legacy token portal has no session: the currency comes from the project's country
   const prog = getAssignmentProgress(a.id);
   const unit = a.quantity_unit ?? "";
 
@@ -50,6 +55,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
 
   return (
     <div className="space-y-5">
+      <MapCenterInit value={entity.map_center ?? ""} />
       {fullPortal && (
         <a href={`/p/${subcontractor.portal_slug}/login`} data-testid="full-portal-banner" className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary-50 p-3 text-sm font-semibold text-slate-700 hover:bg-primary-100">
           <LogIn size={18} className="shrink-0 text-primary" /><span className="flex-1">Your company now has a full portal with progress history, invoices, payments and more.</span><span className="rounded-md bg-primary px-3 py-1 text-xs font-bold text-white">Sign in</span>
@@ -113,7 +119,7 @@ export default async function PortalPage({ params, searchParams }: { params: Pro
       </CardSection>
 
       <CardSection title="Submit invoice" subtitle="Enter this period's quantities against your subcontract items. Rates are fixed by the contract; VAT is added automatically.">
-        <PortalInvoiceForm token={token} today={today} boq={getAssignmentBoq(a.id)} vatRate={DEFAULT_VAT_RATE} currency={getSetting("currency", "AED")} defaults={{ name: subcontractor.contact_person ?? "", email: subcontractor.email ?? "" }} />
+        <PortalInvoiceForm token={token} today={today} boq={getAssignmentBoq(a.id)} vatRate={entity.vat_rate} currency={entity.currency} defaults={{ name: subcontractor.contact_person ?? "", email: subcontractor.email ?? "" }} />
       </CardSection>
 
       <CardSection title="Request completion certificate">

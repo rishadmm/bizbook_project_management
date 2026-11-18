@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Subcontractor portal", robots: { ind
 
 /** Public portal layout: no sidebar/topbar, minimal branded header. */
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
-  const company = getSetting("company_name", "Al Noor Infrastructure LLC");
+  const company = getSetting("company_name");
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-line bg-white">

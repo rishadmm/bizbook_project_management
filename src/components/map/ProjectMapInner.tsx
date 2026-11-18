@@ -10,6 +10,7 @@ import iconUrl from "leaflet/dist/images/marker-icon.png";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import type { MapFeature, ProjectMapProps } from "./types";
+import { getMapCenter } from "./map-center";
 
 // Fix default marker icons under bundlers.
 L.Icon.Default.mergeOptions({ iconUrl: iconUrl.src, iconRetinaUrl: iconRetinaUrl.src, shadowUrl: shadowUrl.src });
@@ -86,7 +87,7 @@ function FitBounds({ features, fitKey, center, zoom }: { features: MapFeature[];
     const valid = features.filter((f) => f.geometry);
     if (valid.length) {
       const b = L.geoJSON(valid.map((f) => ({ type: "Feature", properties: {}, geometry: f.geometry }) as GeoJSON.Feature)).getBounds();
-      if (b.isValid()) { map.fitBounds(b, { padding: [30, 30], maxZoom: 15 }); return; }
+      if (b.isValid()) { map.fitBounds(b, { padding: [30, 30], maxZoom: 15, animate: false }); return; }
     }
     map.setView(center, zoom);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,7 +169,7 @@ function EditController({ features, drawKind, onDirty, onMeasure, registerCollec
   return null;
 }
 
-export default function ProjectMapInner({ features, editable = false, onSave, drawKind = "project", center = DEFAULT_CENTER, zoom = 10, height = 480, legend, className }: ProjectMapProps) {
+export default function ProjectMapInner({ features, editable = false, onSave, drawKind = "project", center = getMapCenter(DEFAULT_CENTER), zoom = 10, height = 480, legend, className }: ProjectMapProps) {
   const [measures, setMeasures] = useState<Measure[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);

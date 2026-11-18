@@ -10,6 +10,8 @@ import type { ApprovalDocType, ApprovalMode, ApproverType } from "@/lib/types";
 import { activeDelegate, cancelRequest, decide, resolveApprovers, submitForApproval, type Decision } from "./engine";
 import { APPROVAL_MODES, APPROVER_TYPES, isDocType } from "./meta";
 import { REGISTRY } from "./registry";
+import { assertUserEntity } from "@/lib/entity-context";
+import { entityOfAttachmentOwner } from "@/lib/entities";
 
 const str = (f: FormData, k: string): string => String(f.get(k) ?? "").trim();
 const numOrNull = (f: FormData, k: string): number | null => { const v = str(f, k).replace(/,/g, ""); return v === "" || Number.isNaN(Number(v)) ? null : Number(v); };
@@ -44,6 +46,9 @@ export async function submitApprovalAction(form: FormData): Promise<ActionResult
     if (!isDocType(type)) throw new Error("Unknown document type");
     const [mod, act] = REGISTRY[type].submitPermission;
     const user = await requirePermission(mod, act);
+    const doc = REGISTRY[type].getDocument(Number(form.get("id")));
+    if (!doc) throw new Error("Document not found");
+    assertUserEntity(user, entityOfAttachmentOwner(doc.entity[0], doc.entity[1]), "Document"); // country access
     submitForApproval(type, Number(form.get("id")), { userId: user.id, note: str(form, "note") || null, payload: restorePayload(type, Number(form.get("id"))) });
     refresh(str(form, "path") || undefined);
   });
@@ -140,16 +145,18 @@ export async function saveWorkflowAction(form: FormData): Promise<ActionResult> 
     const db = getDb();
     const vals = [type, name, str(form, "description") || null, form.getAll("is_active").includes("on") ? 1 : 0, Math.floor(numOrNull(form, "priority") ?? 0), min, max,
       numOrNull(form, "condition_department_id"), str(form, "condition_project_category") || null];
+    const entityId = numOrNull(form, "entity_id");
+    if (entityId !== null && !db.prepare("SELECT 1 FROM entities WHERE id = ?").get(entityId)) throw new Error("Unknown country");
     const wid = db.transaction(() => {
       let wf = id;
       if (id) {
         if (!db.prepare("SELECT 1 FROM approval_workflows WHERE id = ?").get(id)) throw new Error("Workflow not found");
-        db.prepare(`UPDATE approval_workflows SET document_type=?, name=?, description=?, is_active=?, priority=?, condition_min_amount=?, condition_max_amount=?, condition_department_id=?, condition_project_category=?, updated_at=? WHERE id=?`)
-          .run(...vals, new Date().toISOString(), id);
+        db.prepare(`UPDATE approval_workflows SET document_type=?, name=?, description=?, is_active=?, priority=?, condition_min_amount=?, condition_max_amount=?, condition_department_id=?, condition_project_category=?, entity_id=?, updated_at=? WHERE id=?`)
+          .run(...vals, entityId, new Date().toISOString(), id);
         db.prepare("DELETE FROM approval_levels WHERE workflow_id = ?").run(id);
       } else {
-        wf = Number(db.prepare(`INSERT INTO approval_workflows(document_type, name, description, is_active, priority, condition_min_amount, condition_max_amount, condition_department_id, condition_project_category, created_by, updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(...vals, user.id, new Date().toISOString()).lastInsertRowid);
+        wf = Number(db.prepare(`INSERT INTO approval_workflows(document_type, name, description, is_active, priority, condition_min_amount, condition_max_amount, condition_department_id, condition_project_category, entity_id, created_by, updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(...vals, entityId, user.id, new Date().toISOString()).lastInsertRowid);
       }
       levels.forEach((l, i) => db.prepare(`INSERT INTO approval_levels(workflow_id, level_no, name, approver_type, approver_role_id, approver_user_id, approver_department_id, approval_mode, min_approvals, min_amount, sla_hours, allow_self_approval)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(wf, i + 1, l.name, l.approver_type, l.approver_role_id, l.approver_user_id, l.approver_department_id, l.approval_mode, l.min_approvals, l.min_amount, l.sla_hours, l.allow_self_approval ? 1 : 0));
@@ -176,8 +183,8 @@ export async function cloneWorkflowAction(form: FormData): Promise<ActionResult>
     const w = db.prepare("SELECT * FROM approval_workflows WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!w) throw new Error("Workflow not found");
     const nid = db.transaction(() => {
-      const n = Number(db.prepare(`INSERT INTO approval_workflows(document_type, name, description, is_active, priority, condition_min_amount, condition_max_amount, condition_department_id, condition_project_category, created_by, updated_at)
-        VALUES (?,?,?,0,?,?,?,?,?,?,?)`).run(w.document_type, `${w.name} (copy)`, w.description, w.priority, w.condition_min_amount, w.condition_max_amount, w.condition_department_id, w.condition_project_category, user.id, new Date().toISOString()).lastInsertRowid);
+      const n = Number(db.prepare(`INSERT INTO approval_workflows(document_type, name, description, is_active, priority, condition_min_amount, condition_max_amount, condition_department_id, condition_project_category, entity_id, created_by, updated_at)
+        VALUES (?,?,?,0,?,?,?,?,?,?,?,?)`).run(w.document_type, `${w.name} (copy)`, w.description, w.priority, w.condition_min_amount, w.condition_max_amount, w.condition_department_id, w.condition_project_category, w.entity_id ?? null, user.id, new Date().toISOString()).lastInsertRowid);
       db.prepare(`INSERT INTO approval_levels(workflow_id, level_no, name, approver_type, approver_role_id, approver_user_id, approver_department_id, approval_mode, min_approvals, min_amount, sla_hours, allow_self_approval)
         SELECT ?, level_no, name, approver_type, approver_role_id, approver_user_id, approver_department_id, approval_mode, min_approvals, min_amount, sla_hours, allow_self_approval FROM approval_levels WHERE workflow_id = ?`).run(n, id);
       return n;

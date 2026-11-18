@@ -1,5 +1,5 @@
 import { Badge, CardSection, PageHeader, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { parseDbDate } from "@/lib/auth";
 import { requireClientUser } from "@/lib/client-portal-auth";
@@ -30,7 +30,7 @@ export default async function ClientTeam({ params }: { params: Promise<{ slug: s
           </TBody>
         </Table>
       </CardSection>
-      <p className="mt-3 text-xs text-slate-400">Contact {getSetting("company_name", "Al Noor Infrastructure LLC")} to add users.</p>
+      <p className="mt-3 text-xs text-slate-400">Contact {s.entity.legal_name} to add users.</p>
     </>
   );
 }

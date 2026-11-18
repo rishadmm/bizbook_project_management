@@ -7,6 +7,7 @@ import { MapContainer, Marker, Polygon, Polyline, Rectangle, TileLayer, Tooltip,
 import { buildLine, pointAt, sliceLine, RESP_COLOR, RESP_LABEL, STATUS_LABEL, type LineGeom } from "../calc";
 import type { Derived, OpsIssue, OpsMapData, OpsProject, OpsSegment, SegDerived } from "../types";
 import { shortDate, slipText } from "./bits";
+import { getMapCenter } from "@/components/map/map-center";
 
 export type Basemap = "light" | "dark" | "sat";
 export type DimLevel = 0 | 1 | 2; // 0 normal, 1 soft, 2 hard
@@ -244,7 +245,7 @@ export default function MapCanvas(p: CanvasProps) {
   const tile = TILES[p.basemap];
   const selProj = p.projects.find((x) => x.id === p.selectedProject);
   return (
-    <MapContainer center={[25.05, 55.25]} zoom={10} zoomControl={false} attributionControl={false} style={{ height: "100%", width: "100%" }} scrollWheelZoom zoomSnap={0.25} zoomDelta={0.5} wheelPxPerZoomLevel={90}>
+    <MapContainer center={getMapCenter([25.05, 55.25])} zoom={10} zoomControl={false} attributionControl={false} style={{ height: "100%", width: "100%" }} scrollWheelZoom zoomSnap={0.25} zoomDelta={0.5} wheelPxPerZoomLevel={90}>
       <TileLayer key={p.basemap} url={tile.url} attribution={tile.attr} maxZoom={tile.max} maxNativeZoom={tile.native} />
       {tile.labels && <TileLayer key={`${p.basemap}-l`} url={tile.labels} maxZoom={tile.max} maxNativeZoom={tile.native} opacity={0.9} />}
       <Resizer tick={p.resizeTick} />

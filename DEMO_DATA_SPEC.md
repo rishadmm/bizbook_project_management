@@ -46,3 +46,15 @@ Read the status enums in `src/lib/status.ts` (and the tender workflow in `src/fe
 1. Add a script `scripts/check-demo-coverage.ts` (`npm run check:demo`) that loads the DB + `getOpsMapData()` + `computeAll(today)` and **asserts** every rule in B (RAG counts, segment status counts, each resp dominant, CPI/staleness spread, every status value per table has ≥1 row, every rail filter option non-empty). It prints a coverage table and exits 1 on any gap.
 2. `npm run seed && npm run check:demo` passes; `npx tsc --noEmit`, `npm run lint`, `calc.check` pass; `npm run test:e2e` passes (update e2e assertions only if they depended on specific old seed numbers).
 3. Forecast check: at asOf = today+400 d, the RAG counts still show red/amber projects.
+
+
+## Supplier registration data (SUPPLIER_TENDERING_SPEC Part A)
+Per country, appended by the procurement phase (`src/lib/seed-procurement.ts`), existing rows untouched:
+- Every existing subcontractor has a registration profile (company details, categories, 3 contacts, 2-3 references, accepted mandatory documents as placeholder PDFs, an `approve` history row, grade by rating). The two onboarding / prospect suppliers are `under_review`.
+- 8 more approved suppliers (fictional local names, `-demo` e-mail domains, portal owner `Portal@123`). One has an insurance document expiring in 18 days (warning chip), one an expired mandatory insurance (cannot bid until renewed).
+- Registration pipeline: 1 draft, 2 submitted (2 and 8 days waiting), 1 under review (12 days, reviewer assigned, accepted items), 1 referred back (3 queried items with comments), 1 resubmitted (second round), 1 rejected (reason), 1 approved this week.
+- Outbox: every registration template (received, referred back, approved, rejected) per country; portal notifications for the suppliers.
+`npm run check:demo` verifies all of it (Registration / Outbox / Permissions / Security areas).
+
+## Supplier tendering data (SUPPLIER_TENDERING_SPEC Part B / C1)
+Per country (`npm run check:demo` asserts every item): the 4 shared templates; 32 of 40 assignments (80 % +/- 2) with `source = 'tender'` and an `awarded` supplier tender (3-6 bidders, the winner's bid total equals the contract value or its BAFO price version, other totals -8 % to +28 %, a lower bidder sometimes fails the HSE / technical gate, scores of 2-3 board members consistent with the ranking, opening events, 0-3 clarifications, an addendum in ~30 %, an approved `rfx_award` request, award + regret mails, activity); 12 live tenders covering every status (draft, pending_approval, scheduled, published x2, closed, opening, evaluation x2, recommended, award_pending, cancelled) with an open `rfx_publish` and `rfx_award` task; the demo portal suppliers (`gulf-trench`, `al-hajar`) have an open opportunity, a draft bid, a submitted bid and awards; sealed tenders expose no name, content or price through the query layer; the outbox holds every tender template; the new money tables carry currency / locked FX rate / USD columns.

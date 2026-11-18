@@ -8,9 +8,9 @@ import { ENUMS } from "@/lib/status";
 import { docWarning } from "@/features/subcontractors/queries";
 import type { Assignment, CompletionCertificate, ProgressReport, SubInvoice } from "@/lib/types";
 
-export type PortalAsg = Assignment & { project_code: string; project_name: string; stage_code: string | null; stage_name: string | null; project_status: string };
+export type PortalAsg = Assignment & { project_code: string; project_name: string; stage_code: string | null; stage_name: string | null; project_status: string; /** supplier tender the subcontract was awarded through (source = tender) */ tender_code: string | null };
 
-const ASG_SQL = `SELECT a.*, p.code AS project_code, p.name AS project_name, p.status AS project_status, st.code AS stage_code, st.name AS stage_name
+const ASG_SQL = `SELECT a.*, p.code AS project_code, p.name AS project_name, p.status AS project_status, st.code AS stage_code, st.name AS stage_name, (SELECT t.code FROM rfx_tenders t WHERE t.id = a.rfx_id) AS tender_code
   FROM assignments a JOIN projects p ON p.id = a.project_id LEFT JOIN stages st ON st.id = a.stage_id`;
 
 export function listAssignments(s: PortalSession): PortalAsg[] {
@@ -93,10 +93,10 @@ export function getPayments(s: PortalSession, assignmentId?: number): PaymentRow
 }
 
 /* ------------------------------------------------------------------ documents */
-export interface PortalDoc { id: number; doc_type: string; ref_no: string | null; issue_date: string | null; expiry_date: string | null; status: string; attachment_id: number | null; filename: string | null; source: string; uploaded_by_name: string | null; review_note: string | null; created_at: string }
+export interface PortalDoc { doc_type_code?: string | null; version?: number; review_status?: string; review_comment?: string | null; id: number; doc_type: string; ref_no: string | null; issue_date: string | null; expiry_date: string | null; status: string; attachment_id: number | null; filename: string | null; source: string; uploaded_by_name: string | null; review_note: string | null; created_at: string }
 export function listCompanyDocuments(s: PortalSession): PortalDoc[] {
   return getDb().prepare(`SELECT d.*, a.filename FROM subcontractor_documents d LEFT JOIN attachments a ON a.id = d.attachment_id
-    WHERE d.subcontractor_id = ? ORDER BY d.expiry_date IS NULL, d.expiry_date`).all(s.sub.id) as PortalDoc[];
+    WHERE d.subcontractor_id = ? AND d.is_current = 1 ORDER BY d.expiry_date IS NULL, d.expiry_date`).all(s.sub.id) as PortalDoc[];
 }
 /** Documents shared with the subcontractor: attachments of its subcontracts and the drawings of the stages it works on. */
 export interface SharedDoc { id: number; filename: string; category: string | null; mime: string | null; size: number | null; created_at: string; source: string; context: string }

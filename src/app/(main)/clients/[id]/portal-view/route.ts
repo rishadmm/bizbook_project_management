@@ -18,8 +18,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!isAdminUser(me) || !can(me, "clients", "portal")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const id = Number((await ctx.params).id);
   const db = getDb();
-  const client = Number.isInteger(id) ? (db.prepare("SELECT id, name, type, contact_person, email, phone, portal_slug, portal_enabled, portal_show_subcontractors, portal_show_financials FROM clients WHERE id = ?").get(id) as ClientRecord | undefined) : undefined;
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const client = Number.isInteger(id) ? (db.prepare("SELECT id, name, type, contact_person, email, phone, portal_slug, portal_enabled, portal_show_subcontractors, portal_show_financials, entity_id FROM clients WHERE id = ?").get(id) as ClientRecord | undefined) : undefined;
+  if (!client || !me.entityIds.includes(client.entity_id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (!clientPortalAvailable(client)) return NextResponse.json({ error: "The portal is disabled for this client." }, { status: 409 });
   const slug = ensureClientSlug(db, client.id)!;
   await startClientSession({ userId: null, clientId: client.id, remember: false, impersonatedBy: me.id });

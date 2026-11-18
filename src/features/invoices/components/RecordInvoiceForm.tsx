@@ -3,13 +3,14 @@ import { useCallback, useState } from "react";
 import { Button, Field, Input, Select, Textarea } from "@/components/ui";
 import ActionForm from "@/components/ActionForm";
 import { createInvoice } from "@/features/projects/actions";
-import { DEFAULT_VAT_RATE, type BoqItem } from "../calc";
+import { currencyDecimals } from "@/lib/format";
+import type { BoqItem } from "../calc";
 import AttachmentRows from "./AttachmentRows";
 import LinesEditor from "./LinesEditor";
 
 /** Internal "Record invoice" form: subcontract, invoice references, line items (BOQ prefilled), VAT auto, attachments with category. */
-export default function RecordInvoiceForm({ projectId, assignments, today, boq, currency = "AED" }: {
-  projectId: number; assignments: { value: number; label: string }[]; today: string; boq: Record<number, BoqItem[]>; currency?: string;
+export default function RecordInvoiceForm({ projectId, assignments, today, boq, currency, vatRate }: {
+  projectId: number; assignments: { value: number; label: string }[]; today: string; boq: Record<number, BoqItem[]>; /** currency and VAT rate of the project's country */ currency: string; vatRate: number;
 }) {
   const [asg, setAsg] = useState("");
   const [claimed, setClaimed] = useState("");
@@ -27,9 +28,9 @@ export default function RecordInvoiceForm({ projectId, assignments, today, boq, 
         <Field label="Period from"><Input name="period_from" type="date" /></Field>
         <Field label="Period to"><Input name="period_to" type="date" /></Field>
       </div>
-      {asg && boq[Number(asg)] && <LinesEditor key={asg} boq={boq[Number(asg)]} vatRate={DEFAULT_VAT_RATE} currency={currency} allowCustom onTotals={onTotals} />}
+      {asg && boq[Number(asg)] && <LinesEditor key={asg} boq={boq[Number(asg)]} vatRate={vatRate} currency={currency} allowCustom onTotals={onTotals} />}
       <Field label="Claimed amount (incl. VAT)" hint={hasLines ? "Calculated from the line items." : "Enter the line quantities above, or type a lump claim here."}>
-        <Input name="claimed_amount" type="number" step="any" min="0" value={hasLines ? gross.gross.toFixed(2) : claimed} readOnly={hasLines} onChange={(e) => setClaimed(e.target.value)} required={!hasLines} />
+        <Input name="claimed_amount" type="number" step="any" min="0" value={hasLines ? gross.gross.toFixed(currencyDecimals(currency)) : claimed} readOnly={hasLines} onChange={(e) => setClaimed(e.target.value)} required={!hasLines} />
       </Field>
       <Field label="Notes"><Textarea name="notes" rows={2} /></Field>
       <AttachmentRows />

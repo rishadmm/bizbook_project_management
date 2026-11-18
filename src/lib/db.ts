@@ -6,7 +6,7 @@ import { migrate } from "./migrate";
 export type DB = Database.Database;
 
 /** Bump when schema/migrations change so a hot-reloaded dev server re-runs them. */
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 10;
 const g = globalThis as unknown as { __opsDb?: DB; __opsDbV?: number };
 
 /** DB file path (override with OPS_DB_PATH). */
@@ -27,28 +27,15 @@ export function getDb(): DB {
   const schema = fs.readFileSync(path.join(process.cwd(), "src", "lib", "schema.sql"), "utf8");
   db.exec(schema);
   migrate(db);
-  const ins = db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)");
-  ins.run("company_name", "Al Noor Infrastructure LLC");
-  ins.run("currency", "AED");
-  ins.run("approval_cost_threshold", "50000");
-  ins.run("company_address", "Office 1204, Al Moosa Tower 2, Sheikh Zayed Road, Dubai, United Arab Emirates");
-  ins.run("company_trn", "100234567800003");
   g.__opsDb = db;
   g.__opsDbV = SCHEMA_VERSION;
-  publishCurrency(db);
   return db;
 }
 
-function publishCurrency(db: DB) {
-  const r = db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value: string } | undefined;
-  (globalThis as unknown as { __opsCurrency?: string }).__opsCurrency = r?.value || "AED";
-}
-
-/** Upserts a settings value (keeps the formatMoney currency in sync). */
+/** Upserts a global settings value (per-country values live in the `entities` table). */
 export function setSetting(key: string, value: string): void {
   const db = getDb();
   db.prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
-  if (key === "currency") publishCurrency(db);
 }
 
 /** Reads a settings value. */

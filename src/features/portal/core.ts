@@ -1,8 +1,9 @@
 // Shared write logic of the subcontractor portal (legacy token page AND the login portal). No auth here: callers resolve the company/assignment first.
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { getEntityById } from "@/lib/entities";
 import { logActivity } from "@/lib/activity";
 import { saveUpload, saveUploadsFromForm } from "@/lib/files";
-import { todayISO } from "@/lib/format";
+import { currencyDecimals, todayISO } from "@/lib/format";
 import { ENUMS } from "@/lib/status";
 import { PortalError } from "@/lib/portal-auth";
 import { DEFAULT_VAT_RATE, fromSubtotal } from "@/features/invoices/calc";
@@ -112,7 +113,10 @@ export async function saveInvoice(form: FormData, a: Assignment, project: Projec
   const lines = parseInvoiceLines(form, getAssignmentBoq(a.id), { allowCustom: false, fail });
   if (lines.length === 0) fail("Enter the quantity of at least one line item");
   const uploads = readInvoiceUploads(form, { requireTaxInvoice: true, fail });
-  const { subtotal, vat, gross } = fromSubtotal(lines.reduce((t, l) => t + l.amount, 0), DEFAULT_VAT_RATE);
+  const ent = getEntityById(project.entity_id);
+  const vatRate = ent?.vat_rate ?? DEFAULT_VAT_RATE;
+  const currency = ent?.currency ?? "AED";
+  const { subtotal, vat, gross } = fromSubtotal(lines.reduce((t, l) => t + l.amount, 0), vatRate);
   const db = getDb();
   const n = (db.prepare("SELECT COUNT(*) c FROM sub_invoices WHERE assignment_id = ?").get(a.id) as { c: number }).c + 1;
   const no = `${a.code ?? `SC-${a.id}`}-INV-${String(n).padStart(2, "0")}`;
@@ -122,14 +126,14 @@ export async function saveInvoice(form: FormData, a: Assignment, project: Projec
         submitted_by_name, submitted_by_email, submitted_at, due_date)
       VALUES (?,?,?,?,?,?,?,?,'submitted','portal',?, ?,?,?,?,?,?,?,?,?, ?,?,?,?)`).run(
       a.id, project.id, no, date, from || null, to || null, gross, a.contract_value ? Math.round((subtotal / a.contract_value) * 1000) / 10 : 0, str(form, "notes") || null,
-      ref, getSetting("currency", "AED"), DEFAULT_VAT_RATE, subtotal, vat, gross, a.retention_pct || 0, a.advance_pct || 0, previousCertified(a.id),
+      ref, currency, vatRate, subtotal, vat, gross, a.retention_pct || 0, a.advance_pct || 0, previousCertified(a.id),
       who.name || null, who.email || null, new Date().toISOString(), dueDate(date, a.payment_days));
     const newId = Number(r.lastInsertRowid);
     insertInvoiceLines(db, newId, lines);
     return newId;
   })();
   await saveInvoiceUploads(id, uploads, null);
-  await logActivity("invoice", id, "submitted", `Invoice ${no} (ref ${ref}) submitted via portal by ${who.name} (${gross.toFixed(2)} incl. VAT, ${lines.length} line${lines.length === 1 ? "" : "s"}, ${uploads.length} file${uploads.length === 1 ? "" : "s"})`, null);
+  await logActivity("invoice", id, "submitted", `Invoice ${no} (ref ${ref}) submitted via portal by ${who.name} (${gross.toFixed(currencyDecimals(currency))} incl. VAT, ${lines.length} line${lines.length === 1 ? "" : "s"}, ${uploads.length} file${uploads.length === 1 ? "" : "s"})`, null);
   return id;
 }
 

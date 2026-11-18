@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { Download } from "lucide-react";
-import { getSetting } from "@/lib/db";
 import { formatDate, todayISO } from "@/lib/format";
 import { buttonClass } from "@/components/ui/Button";
 import { PrintButton } from "./Controls";
 
 /** Common frame of the printable reports: print header, filter controls (hidden when printing), Print / CSV buttons. */
-export default function ReportFrame({ slug, title, subtitle, clientName, csvHref, controls, children }: {
-  slug: string; title: string; subtitle?: string; clientName: string; csvHref: string; controls?: React.ReactNode; children: React.ReactNode;
+export default function ReportFrame({ slug, title, subtitle, clientName, tenant, csvHref, controls, children }: {
+  slug: string; title: string; subtitle?: string; clientName: string; /** legal name of the client's country operation */ tenant: string; csvHref: string; controls?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
     <article data-testid="report">
@@ -16,7 +15,7 @@ export default function ReportFrame({ slug, title, subtitle, clientName, csvHref
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight text-dark">{title}</h1>
           <p className="mt-0.5 text-sm text-slate-500">{[clientName, subtitle].filter(Boolean).join(" · ")}</p>
-          <p className="hidden text-xs text-slate-500 print:block">Prepared by {getSetting("company_name", "Al Noor Infrastructure LLC")} · generated {formatDate(todayISO())} · only progress verified by the project team is included</p>
+          <p className="hidden text-xs text-slate-500 print:block">Prepared by {tenant} · generated {formatDate(todayISO())} · only progress verified by the project team is included</p>
         </div>
         <div className="no-print flex flex-wrap items-center gap-2"><a href={csvHref} className={buttonClass("secondary")} data-testid="csv-link"><Download size={15} />Export CSV</a><PrintButton /></div>
       </div>

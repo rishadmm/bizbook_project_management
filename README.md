@@ -19,7 +19,7 @@ Lost tenders get a loss analysis. Won tenders become **projects** with map, stag
 | Invoices | `/invoices` | Cross-project invoice queue: review, certify, approve, pay, reject |
 | Approvals | `/approvals`, `/admin/approval-workflows` | Multi-level approval engine: inbox, history, delegations, workflow designer with live preview, per-document-type rules (Settings > Approvals) |
 | Admin / RBAC | `/admin/users`, `/admin/roles`, `/admin/audit` | Users, roles and permission matrix, per-user overrides, lockout/unlock, audit log |
-| Settings | `/settings` | Company, currency, approval thresholds and "approval required" toggles per document type, departments |
+| Settings | `/settings` | Company (group), Countries (legal entity, currency, tax, VAT, prefix, approval limit), Currencies & FX rates (USD, re-value action), approval thresholds and "approval required" toggles per document type, departments |
 | Search | `/search?q=` | Global search (tenders, projects, subcontractors) |
 
 Business rules: `SPEC.md` (metrics are defined once in `src/lib/metrics.ts`). Developer reference: `docs/FOUNDATION.md`. Auth/RBAC/approvals: `AUTH_SPEC.md`. Theme: `THEME_SPEC.md`. Live Ops Map: `MAP_SPEC.md`.
@@ -47,13 +47,30 @@ Other seeded users (Daniel Cruz, Tariq Mahmood) use `first.last@alnoor.demo` / `
 
 ```bash
 npm install
-npm run seed      # wipes data/ops.db and uploads/ in place and loads UAE-style demo data
+npm run seed      # wipes data/ops.db and uploads/ in place and loads the UAE + Oman demo data (one company, two countries)
 npm run dev       # http://localhost:3100
 ```
 
 Other scripts: `npm run build`, `npm start` (port 3100), `npm run lint`, `npm run check:demo`, `npm run test:e2e`.
 
 `npm run seed` also prints the subcontractor **portal links** (`http://localhost:3100/portal/<token>`) for active assignments; you can copy a link from a project's **Subcontracts** tab. New assignments start with the portal disabled.
+
+### One company, two countries (UAE + Oman)
+**Al Noor Infrastructure LLC** operates in the **UAE** (AED) and in **Oman** (OMR) from **one app and one database**. Everything a user sees (dashboard, lists, map, reports, approvals, invoices, search) belongs to the **active country**, chosen with the switcher in the top bar (left of the company pill: flag, country, currency; flag + code below 1280 px wide). Users only see the countries they are granted (Users > country access; administrators see both); a user with one country gets a static flag chip instead of the switcher. A detail page of the other country shows an info bar ("This project belongs to Oman · Switch to Oman") in that record's currency; a country the user cannot access is a 404 everywhere (pages, files, PDF, ERP payload, map, search, approvals).
+
+- **Countries** (`entities`: AE and OM) carry legal name, currency, VAT, tax label / number (TRN / VATIN), CR no., address, map centre, document prefix (`""` / `OM-`, so `PRJ-2026-001` and `OM-PRJ-2026-001`, with a sequence per country) and the approval threshold. Settings > **Countries** edits them; Settings > **Currencies & FX rates** keeps the USD rate history and has the audited "Re-value from date" action.
+- **USD equivalents** (reporting currency USD, stored at table level for later consolidation): every money table has `currency`, `fx_rate_usd` (locked at the row's date by an AFTER INSERT trigger) and `fx_date`, plus a virtual generated `<amount>_usd` column. Invoice detail shows "≈ USD 35,914.20 (rate 2.600780, 08 Aug 2026)", the project's contract value has a USD tooltip. Pegs: AED 0.272294, OMR 2.60078.
+- Documentation of the model (entity inheritance rule, request-scoped currency, triggers): `docs/FOUNDATION.md` ("Multi-country operations"). Specification: `MULTI_COUNTRY_SPEC.md`.
+
+`npm run seed` seeds the **UAE profile first** (ids unchanged), then the **Oman profile** (Al Noor Infrastructure LLC – Oman Branch; clients MTCIT, Omantel, PDO, Muscat Municipality, OXY, Ooredoo Oman, Nama Water Services; fictional Omani subcontractors; projects on real Oman geometry) into the same database. Both profiles live in `src/lib/seed-regions/{uae,oman}.ts`; the engine (`src/lib/seed-engine.ts`, `seed-portal`, `seed-client-portal`, `seed-invoices`, `approvals/seed-demo`) is region-neutral. `npm run check:demo` checks both countries (per-country coverage on an extract of that country's rows, the Oman leak scan restricted to Oman rows, USD-layer and consistency assertions).
+
+| Who | Login | Countries |
+|---|---|---|
+| Admin (switcher visible) | `admin@alnoor.demo` / `Admin@12345` | UAE + Oman (starts in the UAE) |
+| Oman-only staff (no switcher) | `aisha.al.lawati@alnoor.demo` (PM), `hamed.al.rawahi@alnoor.demo` (country manager), `maryam.al.balushi@alnoor.demo`, `fatma.al.hashmi@alnoor.demo`, `asma.al.harthy@alnoor.demo`, `noor.al.zadjali@alnoor.demo` (viewer), `mariam.al.kindi@alnoor.demo` (finance) / `Password@123` | Oman |
+| Shared staff | `rahul.menon@`, `imran.qureshi@`, `daniel.cruz@`, `tariq.mahmood@`, `hamdan.al.zaabi@`, `mariam.khoury@` `…alnoor.demo` / `Password@123` | UAE + Oman |
+| Client portals `/c/mtcit`, `/c/omantel`, `/c/pdo` (financials hidden), `/c/oxy` (subcontractor names hidden), `/c/ooredoo` | `nasser.riyami@mtcit-demo.om`, `fatma.shukaili@omantel-demo.om`, `ahmed.mahrouqi@pdo-demo.om`, `daniel.whitaker@oxy-demo.om`, `salma.dhahli@ooredoo-demo.om` / `Portal@123` | Oman (OMR, tenant "Al Noor Infrastructure LLC – Oman Branch") |
+| Subcontractor portals `/p/al-hajar`, `/p/sohar-trenching`, `/p/muscat-fibre` ... | owner e-mails are printed by `npm run seed` / `Portal@123` | Oman |
 
 ### Subcontractor portal (login per company)
 Every subcontractor has a portal address `http://localhost:3100/p/<slug>` (slug editable in **Subcontractors → Portal access**). Staff with `subcontractors/portal` create the portal users (temporary password shown once, copy / print) and can open a read-only admin view. Portal sessions are completely separate from internal sessions (`bbp_portal` cookie, `portal_*` tables, `lib/portal-auth.ts`): the subcontractor id always comes from the session, never from the URL; every query filters by it; foreign ids return 404 and foreign files 403. Specification: `PORTAL_SPEC.md`.
@@ -86,7 +103,44 @@ Demo client portals (after `npm run seed`; password **`Portal@123`** for every d
 
 E2E: `tests/e2e/client-portal.spec.ts` (credentials flow, client isolation, read-only by construction + stripped map payload, visibility switches, disabled portal / user / lock-out, read-only admin view).
 
-Existing databases upgrade in place on first start (`src/lib/migrate.ts`: auth columns, roles, approval workflows, one-time grant of Live Ops Map access to every role that can view projects).
+Existing databases upgrade in place on first start (`src/lib/migrate.ts`: auth columns, roles, approval workflows, one-time grant of Live Ops Map access to every role that can view projects; SCHEMA_VERSION 9 adds supplier registration, the e-mail outbox and the procurement permissions; SCHEMA_VERSION 8 adds countries, currencies, FX rates, country access and the USD columns/triggers; existing rows become UAE).
+
+### Supplier registration and prequalification
+Suppliers (subcontractors) register themselves: public pages `http://localhost:3100/suppliers` (landing with country picker, categories and the tender notice board), `/suppliers/register` (account step; the other seven steps run in the portal at `/p/<slug>/registration`), `/suppliers/login` (one sign-in for all countries, chooser when an e-mail belongs to several suppliers, forgot password with a one-time reset link `/suppliers/reset/<token>`). Public forms are protected by a honeypot field and an in-memory rate limit. A supplier whose registration is not approved has a **restricted portal** (Dashboard, Registration, Documents, Account; everything else is refused on the server) with a status banner and, when referred back, a checklist of the queried items. Internal review: **Subcontractors > Registrations** (queue with SLA chips), review page `/subcontractors/<id>/registration` (accept / query per section and document, refer back, approve with categories + grade + validity through the `subcontractor_onboarding` workflow, reject; admins can reopen), **Categories** and **Document types** setup (`subcontractors/setup`). Every mail is recorded in **Admin > Email outbox** (`/admin/email-outbox`); with `SMTP_URL` + `MAIL_FROM` set it is also delivered through nodemailer, otherwise it is only logged (demo mode). Developer notes: `docs/FOUNDATION.md` (Supplier registration + procurement foundation).
+
+Demo logins (password **`Portal@123`** for suppliers, **`Password@123`** for staff; `npm run seed` prints the list):
+
+| Who | Login |
+|---|---|
+| Procurement users | `rashid.al.mazrouei@alnoor.demo` (Procurement Manager, UAE), `asma.al.harthy@alnoor.demo` (Oman), `aisha.rahman@alnoor.demo` (UAE) |
+| UAE referred-back supplier | `pradeep.nair@sharjahcoating-demo.ae` (`/p/sharjah-coating`) |
+| Oman referred-back supplier | `saud.hosni@soharpipe-demo.om` (`/p/sohar-pipe`) |
+| Other pipeline suppliers | draft `fahad.nuaimi@ajmanducttrenc-demo.ae` / `majid.zadjali@barkahorizontal-demo.om`; rejected `imran.sheikh@gulfgeneraltra-demo.ae` / `vikram.singh@seebgeneral-demo.om`; resubmitted `hassan.zaabi@raktrafficsafe-demo.ae` / `ibrahim.shehhi@musandamtraffic-demo.om` |
+
+### Supplier tendering (Procurement)
+
+Tendering is the **optional** second route from a project to a subcontract (direct assignment on the project's Subcontracts tab stays as it is: **Assign directly** / **Float a tender**). Sidebar **Procurement** (`/procurement`): KPI tiles, status tabs and filters; `/procurement/new?project=..&stages=..` (scope, template), `/procurement/<id>/edit` (draft editor: details, dates, terms, BOQ, requirements and steps, board, invitees, documents), `/procurement/<id>` (tabs Overview, Requirements & BOQ, Suppliers, Clarifications, Addenda, Opening, Evaluation, Comparison, Recommendation & award, Approvals, Documents, Activity), `/procurement/setup/templates` (4 seeded templates, editable and duplicable). PDFs (react-pdf): `/procurement/<id>/opening-register`, `/recommendation`, `/award-letter`; the supplier gets the Letter of Award at `/p/<slug>/tenders/<id>/loa`. Lifecycle: draft -> pending approval (`rfx_publish`) -> published / scheduled -> closed (lazy, or the audited **Close bidding now**) -> opening -> evaluation -> recommended -> award pending (`rfx_award`) -> awarded (the subcontract is created automatically, `assignments.source = 'tender'`) / cancelled.
+
+**Sealed-bid rule** (enforced in `src/features/procurement/bid-core.ts` and the files API, not only in the UI): before the opening internal users only see that a bid exists, its submission time and receipt hash; two-envelope tenders open the technical envelope first and unseal prices of the technically qualified bids at the commercial opening. Suppliers only ever see their own bid and, after the award, their own result. Separation of duties: scoring only by board members who declared no conflict of interest; the person who recommended the bidder cannot approve the award.
+
+Supplier portal: **Tenders** (badge = open opportunities not yet bid, plus open requests): tabs Opportunities / My bids / Closed / Awarded, tender page (documents, addenda with acknowledge, public Q&A, interested / decline) and the 3-step bid workspace (technical envelope, priced BOQ with live totals, review and submit with receipt hash). Portal roles: owner and manager bid, the new **Tendering** role bids, viewer and site engineer only view.
+
+Demo walkthrough (`npm run seed` prints it; both countries have the same 12 live tenders, `RFX-2026-033..044` in the UAE and `OM-RFX-2026-033..044` in Oman):
+
+| Status | UAE (project / stage) | Oman |
+|---|---|---|
+| draft / pending approval / scheduled | PRJ-2026-012 S1 / S2 / S3 (FTTH Phase 2) | OM-PRJ-2026-012 S1 / S2 / S3 |
+| published, closing in ~5 days (2 bids + a draft bid, clarification, addendum) | PRJ-2026-006 S1 | OM-PRJ-2026-011 S1 |
+| published, selective, closing in ~14 days (invitations only) | PRJ-2026-006 S2 | OM-PRJ-2026-011 S2 |
+| closed, bids sealed | PRJ-2026-011 S1 | OM-PRJ-2026-006 S1 |
+| opened, evaluation not started | PRJ-2026-011 S2 | OM-PRJ-2026-006 S2 |
+| technical evaluation (partially scored, prices sealed) | PRJ-2026-003 S4 | OM-PRJ-2026-003 S4 |
+| commercial evaluation (comparison sheet, arithmetic check, open BAFO request) | PRJ-2026-008 S3 | OM-PRJ-2026-008 S3 |
+| recommended | PRJ-2026-011 S3 | OM-PRJ-2026-011 S3 |
+| award pending (open `rfx_award` task) | PRJ-2026-004 S4 | OM-PRJ-2026-004 S4 |
+| cancelled | PRJ-2026-001 S6 | OM-PRJ-2026-001 S6 |
+
+Portal demo suppliers: UAE `/p/gulf-trench` (`bilal.siddiqui@gulftrenchcabl-demo.ae`, password `Portal@123`) has an open opportunity (selective tender), a draft bid (published tender), a submitted bid (commercial evaluation) and awards; Oman `/p/al-hajar` (`said.busaidi@alhajar-demo.om`) the same with the road tenders. Staff: `rashid.al.mazrouei@alnoor.demo` / `aisha.rahman@alnoor.demo` (UAE) and `asma.al.harthy@alnoor.demo` (Oman) run the tenders; approvals go to `hamdan.al.zaabi@alnoor.demo` (management), finance and the project managers. Mails (invitations, receipts, Letter of Award, regrets) are in **Admin > Email outbox**. E2E: `tests/e2e/supplier-tendering.spec.ts`.
 
 ### Environment variables
 
@@ -95,14 +149,17 @@ Existing databases upgrade in place on first start (`src/lib/migrate.ts`: auth c
 | `OPS_DB_PATH` | `data/ops.db` | SQLite file used by the app, the seed and the tests |
 | `OPS_UPLOAD_DIR` | `uploads/` | Where uploaded files are stored |
 | `NEXT_DIST_DIR` | `.next` | Next.js build/dev output folder; use another value to run a second build/server in parallel |
+| `SMTP_URL`, `MAIL_FROM` | unset (demo mode) | Real mail delivery through nodemailer; unset = mails only logged in the outbox |
+| `APP_URL` | `http://localhost:3100` | Base URL used in mails sent without a request (approval handlers) |
 | `E2E_BASE_URL` | `http://localhost:3100` | Server the Playwright tests drive |
+| `SEED_REGION` | `uae` | Only read by standalone scripts (`scripts/check-demo-entity.ts`); `npm run seed` always seeds both countries |
 
 ## Tests
 
 - Type check and lint: `npx tsc --noEmit`, `npx eslint src tests`
 - Map calculations: `npx tsx src/features/ops-map/calc.check.ts`
-- Demo data coverage: `npm run seed && npm run check:demo` (`scripts/check-demo-coverage.ts`, rules in `DEMO_DATA_SPEC.md`) prints a coverage table (RAG mix, segment statuses, delay causes, CPI/staleness spread, every status value per table, approvals, dashboard widgets) and exits 1 on any gap
-- End to end (Playwright, Chromium): `tests/e2e/*.spec.ts` drive the real UI through the lifecycle (flow), authentication/RBAC (auth), approvals (approvals) and the Live Ops Map (map). They also fail on browser console errors or hydration warnings. `portal-auth` and `client-portal` cover the two login portals.
+- Demo data coverage: `npm run seed && npm run check:demo` (`scripts/check-demo-coverage.ts` runs `scripts/check-demo-entity.ts` once per country, rules in `DEMO_DATA_SPEC.md`, plus multi-country / USD-layer assertions) prints a coverage table (RAG mix, segment statuses, delay causes, CPI/staleness spread, every status value per table, approvals, dashboard widgets) and exits 1 on any gap
+- End to end (Playwright, Chromium): `tests/e2e/*.spec.ts` drive the real UI through the lifecycle (flow), authentication/RBAC (auth), approvals (approvals), the Live Ops Map (map) and the country switcher / data isolation / USD layer (multi-country). They also fail on browser console errors or hydration warnings. `portal-auth` and `client-portal` cover the two login portals.
 
 The e2e tests **mutate data**, so run them against an isolated database and server instead of your dev data:
 

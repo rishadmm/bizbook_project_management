@@ -12,13 +12,14 @@ import { formatDate, formatMoney, pct } from "@/lib/format";
 import { ENUMS, statusHex } from "@/lib/status";
 import { listLosses, lossStats } from "@/features/lost-analysis/queries";
 import { LossBar } from "@/features/lost-analysis/components/LossCharts";
-import { requirePage } from "@/lib/auth";
+import { getActiveEntity, requirePage } from "@/lib/auth";
 import { CHART } from "@/lib/theme";
 
 export default async function LostAnalysisPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   await requirePage("lost_analysis");
+  const entity = await getActiveEntity();
   const { q } = await searchParams;
-  const rows = listLosses();
+  const rows = listLosses(entity.id);
   const s = lossStats(rows);
   const needle = (q ?? "").trim().toLowerCase();
   const lessons = rows.filter((r) => (r.lessons_learned || r.root_cause || r.action_items) &&
@@ -26,7 +27,7 @@ export default async function LostAnalysisPage({ searchParams }: { searchParams:
   const reasonLabel = (r: string) => ENUMS.lossReason[r as keyof typeof ENUMS.lossReason]?.label ?? r;
   return (
     <>
-      <PageHeader title="Loss analysis" description="Why we lose bids, and what we learn from it." />
+      <PageHeader title="Loss analysis" description={`Why we lose bids, and what we learn from it · ${entity.country}.`} />
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Lost tenders" value={s.total} />
         <Stat label="Open analyses" value={s.open} tone={s.open ? "warn" : "default"} hint="not yet closed" />

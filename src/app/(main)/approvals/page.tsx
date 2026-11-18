@@ -6,13 +6,14 @@ import { decideTaskAction, endDelegationAction, setDelegationAction } from "@/li
 import { getMyPendingTasks } from "@/lib/approvals/engine";
 import { DOC_LABEL, DOC_TYPES } from "@/lib/approvals/meta";
 import { approvalLookups, listCompletedFor, listDelegations, listSubmittedBy } from "@/lib/approvals/queries";
-import { requirePage } from "@/lib/auth";
+import { getActiveEntity, requirePage } from "@/lib/auth";
 import { formatDate, formatDateTime, formatMoney, todayISO } from "@/lib/format";
 import ActionForm from "@/components/ActionForm";
 
 export default async function ApprovalsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const me = await requirePage("approvals");
-  const tasks = getMyPendingTasks(me.id);
+  const entity = await getActiveEntity();
+  const tasks = getMyPendingTasks(me.id, entity.id);
   const tabs = [
     { key: "pending", label: "Pending for me", count: tasks.length }, { key: "submitted", label: "Submitted by me" },
     { key: "completed", label: "Completed" }, { key: "delegations", label: "Delegations" },
@@ -33,7 +34,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
               <TBody>
                 {tasks.map((t) => (
                   <TR key={t.task_id} className={t.overdue ? "bg-red-50/40" : ""} data-task={t.task_id}>
-                    <TD><Link href={t.url} className="font-medium text-blue-700 hover:underline">{t.document_ref ?? `#${t.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{t.title}</div></TD>
+                    <TD><span title={entity.country} className="mr-1">{t.entity_flag}</span><Link href={t.url} className="font-medium text-blue-700 hover:underline">{t.document_ref ?? `#${t.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{t.title}</div></TD>
                     <TD className="whitespace-nowrap text-xs">{DOC_LABEL[t.document_type]}</TD>
                     <TD num>{t.amount > 0 ? formatMoney(t.amount, { compact: true }) : "-"}</TD>
                     <TD className="whitespace-nowrap text-xs">L{t.level_no}/{t.level_count} · {t.level_name}{t.delegated_from_name && <div className="text-slate-400">delegated by {t.delegated_from_name}</div>}</TD>
@@ -58,7 +59,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
       )}
 
       {tab === "submitted" && (() => {
-        const rows = listSubmittedBy(me.id);
+        const rows = listSubmittedBy(me.id, entity.id);
         return (
           <CardSection title="Requests I submitted" flush>
             {rows.length === 0 ? <div className="p-4"><EmptyState title="No requests yet" /></div> : (
@@ -67,7 +68,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
                 <TBody>
                   {rows.map((r) => (
                     <TR key={r.id}>
-                      <TD><Link href={r.url} className="font-medium text-blue-700 hover:underline">{r.document_ref ?? `#${r.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{r.title}</div></TD>
+                      <TD><span title={entity.country} className="mr-1">{r.entity_flag}</span><Link href={r.url} className="font-medium text-blue-700 hover:underline">{r.document_ref ?? `#${r.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{r.title}</div></TD>
                       <TD className="whitespace-nowrap text-xs">{DOC_LABEL[r.document_type]}</TD>
                       <TD num>{r.amount > 0 ? formatMoney(r.amount, { compact: true }) : "-"}</TD>
                       <TD><ApprovalStatusBadge status={r.status} /></TD>
@@ -84,7 +85,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
       })()}
 
       {tab === "completed" && (() => {
-        const rows = listCompletedFor(me.id);
+        const rows = listCompletedFor(me.id, entity.id);
         return (
           <CardSection title="Completed approvals" subtitle="Requests you raised or decided that are no longer open" flush>
             {rows.length === 0 ? <div className="p-4"><EmptyState title="No completed approvals yet" /></div> : (
@@ -93,7 +94,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
                 <TBody>
                   {rows.map((r) => (
                     <TR key={r.id}>
-                      <TD><Link href={r.url} className="font-medium text-blue-700 hover:underline">{r.document_ref ?? `#${r.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{r.title}</div></TD>
+                      <TD><span title={entity.country} className="mr-1">{r.entity_flag}</span><Link href={r.url} className="font-medium text-blue-700 hover:underline">{r.document_ref ?? `#${r.document_id}`}</Link><div className="max-w-[260px] truncate text-xs text-slate-500">{r.title}</div></TD>
                       <TD className="whitespace-nowrap text-xs">{DOC_LABEL[r.document_type]}</TD>
                       <TD num>{r.amount > 0 ? formatMoney(r.amount, { compact: true }) : "-"}</TD>
                       <TD><ApprovalStatusBadge status={r.status} /></TD>

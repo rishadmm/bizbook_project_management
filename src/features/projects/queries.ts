@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db";
+import { userInEntitySql } from "@/lib/entities";
 import { getAssignmentProgress, getProjectMetrics, getStageProgress, type AssignmentProgress, type ProjectMetrics, type StageProgress } from "@/lib/metrics";
 import type {
   Assignment, CompletionCertificate, Issue, ProgressManpower, ProgressMaterial, ProgressReport, Project, ProjectBudgetLine, ProjectCost, Stage, SubInvoice,
@@ -16,9 +17,9 @@ export function getProjectRow(id: number): ProjectRow | undefined {
 
 export interface ProjectListItem extends ProjectRow { metrics: ProjectMetrics; lengthKm: number | null; childCount: number }
 
-export function listProjects(): ProjectListItem[] {
+export function listProjects(entityId: number): ProjectListItem[] {
   const db = getDb();
-  const rows = db.prepare(`${PROJECT_SQL} ORDER BY p.code`).all() as ProjectRow[];
+  const rows = db.prepare(`${PROJECT_SQL} WHERE p.entity_id = ? ORDER BY p.code`).all(entityId) as ProjectRow[];
   const counts = new Map<number, number>();
   rows.forEach((r) => { if (r.parent_id) counts.set(r.parent_id, (counts.get(r.parent_id) ?? 0) + 1); });
   return rows.map((r) => ({
@@ -27,22 +28,27 @@ export function listProjects(): ProjectListItem[] {
   }));
 }
 
-export function listUsers(): { id: number; name: string }[] {
-  return getDb().prepare("SELECT id, name FROM users ORDER BY name").all() as { id: number; name: string }[];
+/** Users who may work in the country (administrators + user_entities). */
+export function listUsers(entityId: number): { id: number; name: string }[] {
+  return getDb().prepare(`SELECT u.id, u.name FROM users u WHERE ${userInEntitySql("u")} ORDER BY u.name`).all(entityId) as { id: number; name: string }[];
 }
-export function listClients(): { id: number; name: string }[] {
-  return getDb().prepare("SELECT id, name FROM clients ORDER BY name").all() as { id: number; name: string }[];
+export function listClients(entityId: number): { id: number; name: string }[] {
+  return getDb().prepare("SELECT id, name FROM clients WHERE entity_id = ? ORDER BY name").all(entityId) as { id: number; name: string }[];
 }
-export function listSubcontractors(): { id: number; name: string; trade: string | null; status: string }[] {
-  return getDb().prepare("SELECT id, name, trade, status FROM subcontractors ORDER BY name").all() as { id: number; name: string; trade: string | null; status: string }[];
+export function listSubcontractors(entityId: number): { id: number; name: string; trade: string | null; status: string }[] {
+  return getDb().prepare("SELECT id, name, trade, status FROM subcontractors WHERE entity_id = ? ORDER BY name").all(entityId) as { id: number; name: string; trade: string | null; status: string }[];
 }
 
-export function listRegions(): string[] {
-  return (getDb().prepare("SELECT DISTINCT region FROM projects WHERE region IS NOT NULL AND region <> '' ORDER BY region").all() as { region: string }[]).map((r) => r.region);
+export function listRegions(entityId: number): string[] {
+  return (getDb().prepare("SELECT DISTINCT region FROM projects WHERE entity_id = ? AND region IS NOT NULL AND region <> '' ORDER BY region").all(entityId) as { region: string }[]).map((r) => r.region);
 }
 
 export function getChildren(projectId: number): ProjectListItem[] {
-  return listProjects().filter((p) => p.parent_id === projectId);
+  const rows = getDb().prepare(`${PROJECT_SQL} WHERE p.parent_id = ? ORDER BY p.code`).all(projectId) as ProjectRow[];
+  return rows.map((r) => ({
+    ...r, metrics: getProjectMetrics(r.id), childCount: 0,
+    lengthKm: r.quantity_unit === "km" ? r.total_quantity : r.quantity_unit === "m" && r.total_quantity ? r.total_quantity / 1000 : null,
+  }));
 }
 
 export type StageRowEx = Stage & { progress: StageProgress; weight: number; assignmentCount: number };

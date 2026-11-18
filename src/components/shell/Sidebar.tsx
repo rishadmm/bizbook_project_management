@@ -2,21 +2,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  CheckSquare, ExternalLink, FileText, FolderKanban, GitBranch, HardHat, LayoutDashboard, type LucideIcon, Radar, Receipt, ScrollText, Settings, ShieldCheck, TrendingDown, UserCog, Users,
+  CheckSquare, ExternalLink, FileText, FolderKanban, Gavel, GitBranch, HardHat, Mail, LayoutDashboard, type LucideIcon, Radar, Receipt, ScrollText, Settings, ShieldCheck, TrendingDown, UserCog, Users,
 } from "lucide-react";
 import { cn } from "@/components/ui/cn";
 import { NAV_ITEMS, type ModuleKey, type NavItem } from "@/lib/permissions";
 
 const ICONS: Partial<Record<ModuleKey, LucideIcon>> = {
-  dashboard: LayoutDashboard, tenders: FileText, lost_analysis: TrendingDown, projects: FolderKanban, ops_map: Radar, subcontractors: HardHat, invoices: Receipt,
+  dashboard: LayoutDashboard, procurement: Gavel, tenders: FileText, lost_analysis: TrendingDown, projects: FolderKanban, ops_map: Radar, subcontractors: HardHat, invoices: Receipt,
   clients: Users, approvals: CheckSquare, users: UserCog, roles: ShieldCheck, approval_setup: GitBranch, audit: ScrollText, settings: Settings,
 };
+
+/** Entries that share a module with another entry get their own icon. */
+const HREF_ICONS: Record<string, LucideIcon> = { "/admin/email-outbox": Mail };
 
 /** Sidebar groups (display only); unknown modules fall back to "Overview". */
 const GROUPS: { label: string; modules: ModuleKey[] }[] = [
   { label: "Overview", modules: ["dashboard", "approvals"] },
   { label: "Sales & Tendering", modules: ["tenders", "lost_analysis", "clients"] },
-  { label: "Projects", modules: ["projects", "ops_map"] },
+  { label: "Projects", modules: ["projects", "procurement", "ops_map"] },
   { label: "Subcontracting", modules: ["subcontractors"] },
   { label: "Finance", modules: ["invoices"] },
 ];
@@ -28,11 +31,11 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
  * Sidebar filtered by view permission. `allowed` = modules the user may view.
  * `approvalsBadge` = pending approval count shown next to "Approvals" (wired up by the approval engine; undefined hides it).
  */
-export default function Sidebar({ allowed, approvalsBadge, user, logo }: { logo?: React.ReactNode; companyName?: string; allowed: ModuleKey[]; approvalsBadge?: number; user?: { name: string; role: string } }) {
+export default function Sidebar({ allowed, approvalsBadge, subsBadge, user, logo }: { logo?: React.ReactNode; companyName?: string; allowed: ModuleKey[]; approvalsBadge?: number; subsBadge?: number; user?: { name: string; role: string } }) {
   const path = usePathname();
   const items = NAV_ITEMS.filter((n) => allowed.includes(n.module));
   const link = ({ href, label, module }: NavItem) => {
-    const Icon = ICONS[module] ?? FileText;
+    const Icon = HREF_ICONS[href] ?? ICONS[module] ?? FileText;
     const active = isActive(path, href);
     return (
       <Link key={href} href={href} aria-current={active ? "page" : undefined}
@@ -40,6 +43,7 @@ export default function Sidebar({ allowed, approvalsBadge, user, logo }: { logo?
         <Icon size={17} />
         <span className="flex-1">{label}</span>
         {/* approvals pending-count badge slot */}
+        {module === "subcontractors" && subsBadge ? <span data-testid="subs-badge" title="Registrations waiting for review" className={cn("rounded-full px-1.5 text-[10px] font-bold leading-4", active ? "bg-white text-primary" : "bg-primary text-white")}>{subsBadge}</span> : null}
         {module === "approvals" && approvalsBadge ? <span data-testid="approvals-badge" className={cn("rounded-full px-1.5 text-[10px] font-bold leading-4", active ? "bg-white text-primary" : "bg-primary text-white")}>{approvalsBadge}</span> : null}
       </Link>
     );

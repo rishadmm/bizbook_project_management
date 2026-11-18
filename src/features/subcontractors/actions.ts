@@ -6,7 +6,9 @@ import { logActivity } from "@/lib/activity";
 import { saveUpload } from "@/lib/files";
 import { getCurrentUser } from "@/lib/session";
 import { DEFAULT_ONBOARDING_ITEMS, ENUMS } from "@/lib/status";
-import { requirePermission } from "@/lib/auth";
+import { getActiveEntity, requirePermission } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { entityOfSubcontractor } from "@/lib/entities";
 import { hasOpenRequest, submitForApproval } from "@/lib/approvals/engine";
 import { guard, type ActionResult as FormResult } from "@/lib/action-result";
 import { ensureSlug } from "@/lib/portal-core";
@@ -34,13 +36,16 @@ export async function createSubcontractor(form: FormData): Promise<FormResult> {
   return guard(async () => {
     await requirePermission("subcontractors", "create");
     const f = profileFields(form);
+    const entity = await getActiveEntity();
     const db = getDb();
     const id = db.transaction(() => {
-      const max = (db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(code, 5) AS INTEGER)),0) m FROM subcontractors WHERE code LIKE 'SUB-%'").get() as { m: number }).m;
-      const code = `SUB-${String(max + 1).padStart(3, "0")}`;
-      const r = db.prepare(`INSERT INTO subcontractors(code, name, trade, categories, contact_person, email, phone, address, trade_license_no, trade_license_expiry, tax_no, bank_name, iban, status, rating, notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, f.name, f.trade, f.categories, f.contact_person, f.email, f.phone, f.address,
-        f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, "onboarding", f.rating, f.notes);
+      // own sequence per country: SUB-001 (UAE) / OM-SUB-001 (Oman)
+      const pre = `${entity.doc_prefix}SUB-`;
+      const max = (db.prepare("SELECT COALESCE(MAX(CAST(SUBSTR(code, ?) AS INTEGER)),0) m FROM subcontractors WHERE entity_id = ? AND code LIKE ?").get(pre.length + 1, entity.id, `${pre}%`) as { m: number }).m;
+      const code = `${pre}${String(max + 1).padStart(3, "0")}`;
+      const r = db.prepare(`INSERT INTO subcontractors(code, name, trade, categories, contact_person, email, phone, address, trade_license_no, trade_license_expiry, tax_no, bank_name, iban, status, rating, notes, entity_id, registration_status, registered_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'under_review', CURRENT_TIMESTAMP)`).run(code, f.name, f.trade, f.categories, f.contact_person, f.email, f.phone, f.address,
+        f.trade_license_no, f.trade_license_expiry, f.tax_no, f.bank_name, f.iban, "onboarding", f.rating, f.notes, entity.id);
       const sid = Number(r.lastInsertRowid);
       const ins = db.prepare("INSERT INTO onboarding_checklist(subcontractor_id, item, done) VALUES (?,?,0)");
       for (const item of DEFAULT_ONBOARDING_ITEMS) ins.run(sid, item);
@@ -55,9 +60,10 @@ export async function createSubcontractor(form: FormData): Promise<FormResult> {
 
 export async function updateSubcontractor(form: FormData): Promise<FormResult> {
   return guard(async () => {
-    await requirePermission("subcontractors", "edit");
+    const me = await requirePermission("subcontractors", "edit");
     const id = Number(form.get("id"));
     if (!id) throw new Error("Missing id");
+    assertUserEntity(me, entityOfSubcontractor(id), "Subcontractor");
     const f = profileFields(form);
     getDb().prepare(`UPDATE subcontractors SET name=?, trade=?, categories=?, contact_person=?, email=?, phone=?, address=?, trade_license_no=?,
       trade_license_expiry=?, tax_no=?, bank_name=?, iban=?, rating=?, notes=? WHERE id=?`).run(f.name, f.trade, f.categories, f.contact_person, f.email,
@@ -73,6 +79,7 @@ export async function setSubcontractorStatus(form: FormData): Promise<void> {
   const user = await requirePermission("subcontractors", status === "approved" ? "approve" : "edit");
   const cur = (getDb().prepare("SELECT status FROM subcontractors WHERE id = ?").get(id) as { status: string } | undefined)?.status;
   if (!cur) throw new Error("Subcontractor not found");
+  assertUserEntity(user, entityOfSubcontractor(id), "Subcontractor");
   if (status === "approved") {
     const open = (getDb().prepare("SELECT COUNT(*) c FROM onboarding_checklist WHERE subcontractor_id = ? AND done = 0").get(id) as { c: number }).c;
     if (open > 0) throw new Error("Complete the onboarding checklist first");
@@ -91,8 +98,9 @@ export async function setSubcontractorStatus(form: FormData): Promise<void> {
 }
 
 export async function toggleChecklistItem(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const user = await requirePermission("subcontractors", "edit");
   const itemId = Number(form.get("item_id")); const sid = Number(form.get("id"));
+  assertUserEntity(user, entityOfSubcontractor(sid), "Subcontractor");
   const db = getDb();
   const it = db.prepare("SELECT * FROM onboarding_checklist WHERE id = ? AND subcontractor_id = ?").get(itemId, sid) as { done: number; item: string } | undefined;
   if (!it) throw new Error("Checklist item not found");
@@ -110,9 +118,10 @@ export async function approveSubcontractor(form: FormData): Promise<void> {
 }
 
 export async function saveDocument(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const user = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id")) || 0;
   const sid = Number(form.get("subcontractor_id"));
+  assertUserEntity(user, entityOfSubcontractor(sid), "Subcontractor");
   const docType = str(form, "doc_type"); const status = str(form, "status") || "pending";
   if (!sid) throw new Error("Missing subcontractor");
   if (!DOC_TYPES.includes(docType)) throw new Error("Invalid document type");
@@ -135,8 +144,9 @@ export async function saveDocument(form: FormData): Promise<void> {
 }
 
 export async function verifyDocument(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const user = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id")); const sid = Number(form.get("subcontractor_id"));
+  assertUserEntity(user, entityOfSubcontractor(sid), "Subcontractor");
   const r = getDb().prepare("UPDATE subcontractor_documents SET status='verified' WHERE id=? AND subcontractor_id=?").run(id, sid);
   if (!r.changes) throw new Error("Document not found");
   await logActivity("subcontractor", sid, "document", "Document verified");
@@ -144,8 +154,9 @@ export async function verifyDocument(form: FormData): Promise<void> {
 }
 
 export async function deleteDocument(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const user = await requirePermission("subcontractors", "edit");
   const id = Number(form.get("id")); const sid = Number(form.get("subcontractor_id"));
+  assertUserEntity(user, entityOfSubcontractor(sid), "Subcontractor");
   getDb().prepare("DELETE FROM subcontractor_documents WHERE id=? AND subcontractor_id=?").run(id, sid);
   await logActivity("subcontractor", sid, "document", "Document deleted");
   revalidatePath(`/subcontractors/${sid}`); revalidatePath("/subcontractors"); revalidatePath("/");

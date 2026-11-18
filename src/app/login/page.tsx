@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowLeft, LifeBuoy } from "lucide-react";
+import { ArrowLeft, Info, LifeBuoy } from "lucide-react";
+import { getDb } from "@/lib/db";
+import { DEMO_ADMIN_PASSWORD } from "@/lib/migrate";
+import { verifyPassword } from "@/lib/password";
 import { getSession, safeNext } from "@/lib/auth";
 import LoginForm from "./LoginForm";
 
@@ -24,12 +27,21 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       </>
     );
   }
+  // Demo hint (local demo data only): the seed writes `demo_admin_email`; shown only while that admin still has the published demo password.
+  let hint: string | null = null;
+  if (process.env.NODE_ENV !== "production") {
+    const db = getDb();
+    const email = (db.prepare("SELECT value FROM settings WHERE key = 'demo_admin_email'").get() as { value: string } | undefined)?.value;
+    const u = email ? db.prepare("SELECT email, password_hash FROM users WHERE lower(email) = lower(?) AND status = 'active'").get(email) as { email: string; password_hash: string | null } | undefined : undefined;
+    if (u?.password_hash && verifyPassword(DEMO_ADMIN_PASSWORD, u.password_hash)) hint = `${u.email} / ${DEMO_ADMIN_PASSWORD}`;
+  }
   return (
     <>
       <div className={eyebrow}>Your workspace awaits</div>
       <h1 className={h1}>Sign in to BizBook <span className="text-primary">Project</span></h1>
       <p className="mb-7 mt-2 text-[15px] text-slate-500">Pick up right where you left off.</p>
       <LoginForm next={safeNext(next)} />
+      {hint && <p data-testid="demo-hint" className="mt-6 flex items-start gap-2 rounded-xl bg-primary-50 px-3.5 py-2.5 text-xs font-semibold text-slate-600"><Info size={14} className="mt-0.5 shrink-0 text-primary" /><span>Demo login: <span className="font-mono text-dark">{hint}</span></span></p>}
     </>
   );
 }

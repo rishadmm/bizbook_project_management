@@ -1,6 +1,5 @@
 import { RotateCcw, UserPlus } from "lucide-react";
 import { Badge, Button, CardSection, ModalButton, PageHeader, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
-import { getSetting } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { getPortalUsers } from "@/features/portal-admin/queries";
 import { PORTAL_ROLES, portalRoleLabel } from "@/lib/portal-core";
@@ -14,7 +13,7 @@ export default async function PortalTeam({ params }: { params: Promise<{ slug: s
   const { slug } = await params;
   const s = await requirePortalUser(slug, "team");
   const users = getPortalUsers(s.sub.id);
-  const tenant = getSetting("company_name", "Al Noor Infrastructure LLC");
+  const tenant = s.entity.legal_name;
   return (
     <>
       <PageHeader title="Team" description={`People at ${s.sub.name} with access to this portal.`}

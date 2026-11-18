@@ -13,6 +13,8 @@ export const DOC_TYPES: { type: ApprovalDocType; label: string }[] = [
   { type: "completion_certificate", label: "Completion certificate" },
   { type: "project_cost", label: "Manual project cost" },
   { type: "loss_analysis", label: "Loss analysis closure" },
+  { type: "rfx_publish", label: "Supplier tender publication" },
+  { type: "rfx_award", label: "Supplier tender award" },
 ];
 export const DOC_LABEL: Record<string, string> = Object.fromEntries(DOC_TYPES.map((d) => [d.type, d.label]));
 export const isDocType = (t: string): t is ApprovalDocType => t in DOC_LABEL;

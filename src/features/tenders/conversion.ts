@@ -4,12 +4,14 @@ import { todayISO } from "../../lib/format";
 import type { BudgetLine, Tender, TenderRevision } from "../../lib/types";
 import { canMove } from "./workflow";
 
-export function nextCode(table: "tenders" | "projects", prefix: string): string {
+/** Next document code of a country: `<doc_prefix><PFX>-<year>-<seq>` with its own sequence per entity (UAE: PRJ-2026-001, Oman: OM-PRJ-2026-001). */
+export function nextCode(table: "tenders" | "projects", prefix: string, entityId: number): string {
   const year = new Date().getFullYear();
-  const like = `${prefix}-${year}-%`;
-  const rows = getDb().prepare(`SELECT code FROM ${table} WHERE code LIKE ?`).all(like) as { code: string }[];
-  const max = rows.reduce((m, r) => Math.max(m, Number(r.code.split("-")[2]) || 0), 0);
-  return `${prefix}-${year}-${String(max + 1).padStart(3, "0")}`;
+  const dp = (getDb().prepare("SELECT doc_prefix p FROM entities WHERE id = ?").get(entityId) as { p: string } | undefined)?.p ?? "";
+  const full = `${dp}${prefix}-${year}-`;
+  const rows = getDb().prepare(`SELECT code FROM ${table} WHERE entity_id = ? AND code LIKE ?`).all(entityId, `${full}%`) as { code: string }[];
+  const max = rows.reduce((m, r) => Math.max(m, Number(r.code.slice(full.length)) || 0), 0);
+  return `${full}${String(max + 1).padStart(3, "0")}`;
 }
 
 export interface WonInput { won_value: number; award_date: string; start_date: string | null; end_date: string | null; manager_id: number | null }
@@ -32,10 +34,10 @@ export function convertTenderToProject(tenderId: number, input: WonInput): numbe
     }
     const cost = (l: BudgetLine) => l.quantity * l.unit_cost;
     const totalCost = lines.reduce((s, l) => s + cost(l), 0);
-    const code = nextCode("projects", "PRJ");
+    const code = nextCode("projects", "PRJ", t.entity_id);
     const p = db.prepare(`INSERT INTO projects(code, name, tender_id, client_id, category, location, contract_value, budget_cost, start_date, end_date, status,
-      manager_id, total_quantity, quantity_unit, description) VALUES (?,?,?,?,?,?,?,?,?,?, 'planning', ?,?,?,?)`)
-      .run(code, t.title, t.id, t.client_id, t.category, t.location, input.won_value, totalCost, input.start_date, input.end_date, input.manager_id, t.quantity, t.quantity_unit, t.scope_summary);
+      manager_id, total_quantity, quantity_unit, description, entity_id) VALUES (?,?,?,?,?,?,?,?,?,?, 'planning', ?,?,?,?,?)`)
+      .run(code, t.title, t.id, t.client_id, t.category, t.location, input.won_value, totalCost, input.start_date, input.end_date, input.manager_id, t.quantity, t.quantity_unit, t.scope_summary, t.entity_id);
     const pid = Number(p.lastInsertRowid);
     const stageIds = new Map<string, number>();
     stageNames.forEach((name, i) => {

@@ -2,6 +2,7 @@
 // the approval event history plus an activity_log entry on the document. Functions take the acting user id explicitly so the
 // engine does not depend on request cookies.
 import { getDb, getSetting } from "../db";
+import { entityOfAttachmentOwner, userHasEntity } from "../entities";
 import { todayISO } from "../format";
 import type {
   ApprovalDelegation, ApprovalDocType, ApprovalLevel, ApprovalRequest, ApprovalTask, ApprovalWorkflow,
@@ -18,18 +19,21 @@ export class ApprovalError extends Error { constructor(m: string) { super(m); th
 
 /* ------------------------------------------------------------------ workflow selection */
 
-export interface DocContext { amount: number; departmentId: number | null; projectCategory: string | null }
+export interface DocContext { amount: number; departmentId: number | null; projectCategory: string | null; /** country of the document: workflows of that country (or of all countries) apply */ entityId?: number | null }
 
 /** Active workflow with matching conditions: highest priority, then most specific, then newest. */
 export function selectWorkflow(type: ApprovalDocType, ctx: DocContext): ApprovalWorkflow | null {
-  const rows = db().prepare("SELECT * FROM approval_workflows WHERE document_type = ? AND is_active = 1").all(type) as ApprovalWorkflow[];
+  const rows = (db().prepare("SELECT * FROM approval_workflows WHERE document_type = ? AND is_active = 1").all(type) as ApprovalWorkflow[])
+    .filter((w) => w.entity_id === null || w.entity_id === undefined || ctx.entityId === undefined || ctx.entityId === null || w.entity_id === ctx.entityId);
   const spec = (w: ApprovalWorkflow) => [w.condition_min_amount, w.condition_max_amount, w.condition_department_id, w.condition_project_category].filter((x) => x !== null).length;
   const ok = rows.filter((w) =>
     (w.condition_min_amount === null || ctx.amount >= w.condition_min_amount) &&
     (w.condition_max_amount === null || ctx.amount < w.condition_max_amount) &&
     (w.condition_department_id === null || w.condition_department_id === ctx.departmentId) &&
     (w.condition_project_category === null || w.condition_project_category === ctx.projectCategory));
-  ok.sort((a, b) => b.priority - a.priority || spec(b) - spec(a) || b.id - a.id);
+  // a workflow of the document's own country beats a group-wide one (entity_id NULL), then priority, specificity, newest
+  const own = (w: ApprovalWorkflow) => (w.entity_id !== null && w.entity_id !== undefined ? 1 : 0);
+  ok.sort((a, b) => own(b) - own(a) || b.priority - a.priority || spec(b) - spec(a) || b.id - a.id);
   return ok[0] ?? null;
 }
 
@@ -57,22 +61,28 @@ export function applicableLevels(workflowId: number, amount: number): LevelSnaps
 
 /* ------------------------------------------------------------------ approver resolution */
 
-export interface ResolveCtx { requesterId: number | null; departmentId: number | null; projectId: number | null }
+export interface ResolveCtx { requesterId: number | null; departmentId: number | null; projectId: number | null; /** approvers must be allowed to work in this country */ entityId?: number | null }
 
-/** Active user ids a level resolves to (before requester exclusion and delegation). */
+/**
+ * Active user ids a level resolves to (before requester exclusion and delegation). Only users who may work in the document's country qualify;
+ * a department head without access to that country is replaced by the department's accessible users (first by id).
+ */
 export function resolveApprovers(l: Pick<LevelSnapshot, "approver_type" | "approver_role_id" | "approver_user_id" | "approver_department_id">, c: ResolveCtx): number[] {
   const d = db();
   const ids = (sql: string, ...a: unknown[]) => (d.prepare(sql).all(...a) as { id: number }[]).map((r) => r.id);
+  const access = (list: number[]) => (c.entityId ? list.filter((u) => userHasEntity(u, c.entityId)) : list);
   switch (l.approver_type) {
-    case "role": return l.approver_role_id ? ids("SELECT id FROM users WHERE role_id = ? AND status = 'active' ORDER BY id", l.approver_role_id) : [];
-    case "user": return l.approver_user_id ? ids("SELECT id FROM users WHERE id = ? AND status = 'active'", l.approver_user_id) : [];
-    case "department": return l.approver_department_id ? ids("SELECT id FROM users WHERE department_id = ? AND status = 'active' ORDER BY id", l.approver_department_id) : [];
+    case "role": return l.approver_role_id ? access(ids("SELECT id FROM users WHERE role_id = ? AND status = 'active' ORDER BY id", l.approver_role_id)) : [];
+    case "user": return l.approver_user_id ? access(ids("SELECT id FROM users WHERE id = ? AND status = 'active'", l.approver_user_id)) : [];
+    case "department": return l.approver_department_id ? access(ids("SELECT id FROM users WHERE department_id = ? AND status = 'active' ORDER BY id", l.approver_department_id)) : [];
     case "department_head": {
       const dept = l.approver_department_id ?? c.departmentId;
-      return dept ? ids("SELECT u.id FROM departments d JOIN users u ON u.id = d.head_user_id WHERE d.id = ? AND u.status = 'active'", dept) : [];
+      if (!dept) return [];
+      const head = access(ids("SELECT u.id FROM departments d JOIN users u ON u.id = d.head_user_id WHERE d.id = ? AND u.status = 'active'", dept));
+      return head.length ? head : access(ids("SELECT id FROM users WHERE department_id = ? AND status = 'active' ORDER BY id", dept)).slice(0, 1);
     }
-    case "project_manager": return c.projectId ? ids("SELECT u.id FROM projects p JOIN users u ON u.id = p.manager_id WHERE p.id = ? AND u.status = 'active'", c.projectId) : [];
-    case "requester_manager": return c.requesterId ? ids("SELECT u.id FROM users r JOIN users u ON u.id = r.manager_id WHERE r.id = ? AND u.status = 'active'", c.requesterId) : [];
+    case "project_manager": return c.projectId ? access(ids("SELECT u.id FROM projects p JOIN users u ON u.id = p.manager_id WHERE p.id = ? AND u.status = 'active'", c.projectId)) : [];
+    case "requester_manager": return c.requesterId ? access(ids("SELECT u.id FROM users r JOIN users u ON u.id = r.manager_id WHERE r.id = ? AND u.status = 'active'", c.requesterId)) : [];
   }
 }
 
@@ -111,7 +121,7 @@ function logDoc(r: ApprovalRequest, action: string, message: string, userId: num
 }
 function contextOf(r: ApprovalRequest): ResolveCtx {
   const info = REGISTRY[r.document_type].getDocument(r.document_id, json(r.payload, {}));
-  return { requesterId: r.requested_by, departmentId: info?.departmentId ?? null, projectId: info?.projectId ?? null };
+  return { requesterId: r.requested_by, departmentId: info?.departmentId ?? null, projectId: info?.projectId ?? null, entityId: r.entity_id ?? null };
 }
 
 /** Creates the tasks of one level. Throws an ApprovalError naming the level when nobody can approve. */
@@ -119,8 +129,10 @@ function createTasks(r: ApprovalRequest, lvl: LevelSnapshot, opts: { fallbackToA
   const c = contextOf(r);
   let approvers = resolveApprovers(lvl, c);
   if (!lvl.allow_self_approval && r.requested_by) approvers = approvers.filter((u) => u !== r.requested_by);
+  const barred = REGISTRY[r.document_type].excludedApprovers?.(r.document_id) ?? []; // separation of duties (e.g. the recommender of a tender award)
+  if (barred.length) approvers = approvers.filter((u) => !barred.includes(u));
   if (approvers.length === 0 && opts.fallbackToAdmins) {
-    approvers = (db().prepare("SELECT u.id FROM users u JOIN roles ro ON ro.id = u.role_id WHERE ro.code = 'super_admin' AND u.status = 'active' ORDER BY u.id").all() as { id: number }[]).map((x) => x.id);
+    approvers = (db().prepare("SELECT u.id FROM users u JOIN roles ro ON ro.id = u.role_id WHERE ro.code = 'super_admin' AND u.status = 'active' ORDER BY u.id").all() as { id: number }[]).map((x) => x.id).filter((u) => !barred.includes(u));
     if (approvers.length) event(r.id, lvl.level_no, "escalated", null, `No eligible approver for "${lvl.name}" (${lvl.label}); assigned to super administrators`);
   }
   if (approvers.length === 0) throw new ApprovalError(`Level ${lvl.level_no} "${lvl.name}": no eligible approvers found (${lvl.label}). Ask an administrator to fix the approval workflow.`);
@@ -171,23 +183,24 @@ export function submitForApproval(type: ApprovalDocType, documentId: number, opt
     const why = entry.canSubmit?.(documentId);
     if (why) throw new ApprovalError(why);
     const cat = doc.projectId ? (db().prepare("SELECT category FROM projects WHERE id = ?").get(doc.projectId) as { category: string | null } | undefined)?.category ?? null : null;
-    const wf = selectWorkflow(type, { amount: doc.amount, departmentId: doc.departmentId, projectCategory: cat });
+    const entityId = entityOfAttachmentOwner(doc.entity[0], doc.entity[1]) ?? 1;
+    const wf = selectWorkflow(type, { amount: doc.amount, departmentId: doc.departmentId, projectCategory: cat, entityId });
     const lv = wf ? applicableLevels(wf.id, doc.amount) : [];
-    const ins = db().prepare(`INSERT INTO approval_requests(document_type, document_id, document_ref, title, amount, workflow_id, current_level, status, requested_by, requested_at, note, levels_json, payload)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const ins = db().prepare(`INSERT INTO approval_requests(document_type, document_id, document_ref, title, amount, workflow_id, current_level, status, requested_by, requested_at, note, levels_json, payload, entity_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     if (!wf || lv.length === 0) {
       if (!wf && getSetting(`approval_required_${type}`, "0") === "1") throw new ApprovalError(`No approval workflow configured for ${entry.label}.`);
-      const id = Number(ins.run(type, documentId, doc.ref, doc.title, doc.amount, wf?.id ?? null, 0, "approved", opts.userId, nowIso(), opts.note ?? null, "[]", JSON.stringify(payload)).lastInsertRowid);
+      const id = Number(ins.run(type, documentId, doc.ref, doc.title, doc.amount, wf?.id ?? null, 0, "approved", opts.userId, nowIso(), opts.note ?? null, "[]", JSON.stringify(payload), entityId).lastInsertRowid);
       db().prepare("UPDATE approval_requests SET completed_at = ? WHERE id = ?").run(nowIso(), id);
       event(id, null, "auto_approved", opts.userId, wf ? "No approval level applies to this amount" : "No approval workflow configured");
       logEntity(doc.entity[0], doc.entity[1], "approval", `${entry.label} auto-approved (no approval required)`, opts.userId);
       entry.onApproved(documentId, ctxFor(loadRequest(id), opts.userId, null));
       return { status: "auto_approved", requestId: id };
     }
-    const id = Number(ins.run(type, documentId, doc.ref, doc.title, doc.amount, wf.id, lv[0].level_no, "pending", opts.userId, nowIso(), opts.note ?? null, JSON.stringify(lv), JSON.stringify(payload)).lastInsertRowid);
+    const id = Number(ins.run(type, documentId, doc.ref, doc.title, doc.amount, wf.id, lv[0].level_no, "pending", opts.userId, nowIso(), opts.note ?? null, JSON.stringify(lv), JSON.stringify(payload), entityId).lastInsertRowid);
     const req = loadRequest(id);
     event(id, null, "submitted", opts.userId, opts.note ?? null);
-    createTasks(req, lv[0]);
+    createTasks(req, lv[0], { fallbackToAdmins: !!entry.escalateFirstLevel });
     logEntity(doc.entity[0], doc.entity[1], "approval", `${entry.label} submitted for approval (${wf.name}, ${lv.length} level${lv.length === 1 ? "" : "s"})`, opts.userId);
     return { status: "pending", requestId: id };
   })();
@@ -201,10 +214,12 @@ export function decide(taskId: number, decision: Decision, comment: string | nul
     const task = db().prepare("SELECT * FROM approval_tasks WHERE id = ?").get(taskId) as ApprovalTask | undefined;
     if (!task) throw new ApprovalError("Approval task not found");
     const r = loadRequest(task.request_id);
+    if (!userHasEntity(actorId, r.entity_id)) throw new ApprovalError("Approval request not found");
     if (r.status !== "pending") throw new ApprovalError("This approval request is no longer pending.");
     if (task.status !== "pending") throw new ApprovalError("This task has already been decided.");
     const actor = db().prepare("SELECT u.id, u.name, ro.code AS role_code FROM users u LEFT JOIN roles ro ON ro.id = u.role_id WHERE u.id = ?").get(actorId) as { id: number; name: string; role_code: string | null } | undefined;
     if (!actor) throw new ApprovalError("Unknown user");
+    if (REGISTRY[r.document_type].excludedApprovers?.(r.document_id).includes(actorId)) throw new ApprovalError("You recommended this bidder and cannot decide the award (separation of duties).");
     const onBehalf = task.assignee_user_id !== actorId;
     if (onBehalf && actor.role_code !== "super_admin") throw new ApprovalError("Only the assigned approver can decide this task.");
     const text = (comment ?? "").trim() || null;
@@ -239,6 +254,7 @@ export function decide(taskId: number, decision: Decision, comment: string | nul
 export function cancelRequest(requestId: number, actorId: number): void {
   db().transaction(() => {
     const r = loadRequest(requestId);
+    if (!userHasEntity(actorId, r.entity_id)) throw new ApprovalError("Approval request not found");
     if (r.status !== "pending") throw new ApprovalError("Only pending requests can be cancelled.");
     const actor = db().prepare("SELECT ro.code AS role_code FROM users u LEFT JOIN roles ro ON ro.id = u.role_id WHERE u.id = ?").get(actorId) as { role_code: string | null } | undefined;
     const isAdmin = actor?.role_code === "super_admin" || actor?.role_code === "admin";
@@ -301,25 +317,25 @@ export function getApprovalStatus(type: ApprovalDocType, documentId: number): Ap
 }
 
 export interface PendingTaskRow {
-  task_id: number; request_id: number; document_type: ApprovalDocType; document_id: number; document_ref: string | null; title: string | null; amount: number;
+  task_id: number; request_id: number; document_type: ApprovalDocType; document_id: number; document_ref: string | null; title: string | null; amount: number; entity_flag: string | null;
   level_no: number; level_name: string; level_count: number; requested_by: number | null; requester_name: string | null; requested_at: string;
   created_at: string; due_at: string | null; overdue: boolean; delegated_from_name: string | null; url: string;
 }
 /** Pending tasks assigned to a user (including delegated ones), oldest first. */
-export function getMyPendingTasks(userId: number): PendingTaskRow[] {
+export function getMyPendingTasks(userId: number, entityId?: number | null): PendingTaskRow[] {
   const rows = db().prepare(`SELECT t.id AS task_id, t.request_id, t.level_no, t.created_at, t.due_at, f.name AS delegated_from_name,
-      r.document_type, r.document_id, r.document_ref, r.title, r.amount, r.requested_by, r.requested_at, r.levels_json, u.name AS requester_name
+      r.document_type, r.document_id, r.document_ref, r.title, r.amount, r.requested_by, r.requested_at, r.levels_json, u.name AS requester_name, en.flag AS entity_flag
     FROM approval_tasks t JOIN approval_requests r ON r.id = t.request_id AND r.status = 'pending'
-    LEFT JOIN users u ON u.id = r.requested_by LEFT JOIN users f ON f.id = t.delegated_from_user_id
-    WHERE t.assignee_user_id = ? AND t.status = 'pending' ORDER BY t.id`).all(userId) as (Omit<PendingTaskRow, "level_name" | "level_count" | "overdue" | "url"> & { levels_json: string | null })[];
+    LEFT JOIN users u ON u.id = r.requested_by LEFT JOIN users f ON f.id = t.delegated_from_user_id LEFT JOIN entities en ON en.id = r.entity_id
+    WHERE t.assignee_user_id = ? AND t.status = 'pending' ${entityId ? "AND r.entity_id = ?" : ""} ORDER BY t.id`).all(...(entityId ? [userId, entityId] : [userId])) as (Omit<PendingTaskRow, "level_name" | "level_count" | "overdue" | "url"> & { levels_json: string | null })[];
   return rows.map(({ levels_json, ...r }) => {
     const lv = json<LevelSnapshot[]>(levels_json, []);
     const info = REGISTRY[r.document_type]?.getDocument(r.document_id);
     return { ...r, level_name: lv.find((l) => l.level_no === r.level_no)?.name ?? `Level ${r.level_no}`, level_count: lv.length, overdue: isOverdue({ status: "pending", due_at: r.due_at }), url: info?.url ?? "/approvals" };
   });
 }
-export function getPendingCount(userId: number): number {
-  return (db().prepare("SELECT COUNT(*) c FROM approval_tasks t JOIN approval_requests r ON r.id = t.request_id AND r.status = 'pending' WHERE t.assignee_user_id = ? AND t.status = 'pending'").get(userId) as { c: number }).c;
+export function getPendingCount(userId: number, entityId?: number | null): number {
+  return (db().prepare(`SELECT COUNT(*) c FROM approval_tasks t JOIN approval_requests r ON r.id = t.request_id AND r.status = 'pending' WHERE t.assignee_user_id = ? AND t.status = 'pending' ${entityId ? "AND r.entity_id = ?" : ""}`).get(...(entityId ? [userId, entityId] : [userId])) as { c: number }).c;
 }
 
 /** The user's open task on a document, if any (for the panel's decision form). */

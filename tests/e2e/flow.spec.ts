@@ -292,7 +292,7 @@ test.describe.serial("tender-to-project flow", () => {
 
   test("create subcontract assignment", async () => {
     await go(`/projects/${projectId}?tab=subcontracts`);
-    await clickBtn("New subcontract");
+    await clickBtn("Assign directly");
     await modal().locator("[name=subcontractor_id]").selectOption({ index: 1 });
     await modal().locator("[name=stage_id]").selectOption({ index: 1 });
     await modal().locator("[name=scope]").fill("QA paving works");

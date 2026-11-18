@@ -18,7 +18,7 @@ export default async function ScheduleReportPage({ params, searchParams }: { par
   const r = scheduleReport(s, sp.project);
   const qs = new URLSearchParams({ report: "schedule", ...(sp.project ? { project: sp.project } : {}) });
   return (
-    <ReportFrame slug={slug} title="Schedule & forecast" subtitle={`as of ${formatDate(r.today)}`} clientName={s.client.name} csvHref={`/c/${slug}/reports/export?${qs}`}
+    <ReportFrame slug={slug} title="Schedule & forecast" subtitle={`as of ${formatDate(r.today)}`} clientName={s.client.name} tenant={s.entity.legal_name} csvHref={`/c/${slug}/reports/export?${qs}`}
       controls={<SelectParam name="project" label="Project" value={sp.project ?? ""} options={v.projects.map((p) => ({ value: String(p.id), label: `${p.code} · ${p.name}` }))} all="All projects" />}>
       {r.items.length === 0 && <EmptyState title="No projects to report" />}
       {r.items.map(({ project: p, stages }) => (

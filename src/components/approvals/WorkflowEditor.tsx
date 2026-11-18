@@ -12,6 +12,7 @@ import ActionForm from "@/components/ActionForm";
 export interface WorkflowInit {
   id: number; name: string; document_type: string; description: string; priority: number; is_active: boolean;
   condition_min_amount: number | null; condition_max_amount: number | null; condition_department_id: number | null; condition_project_category: string | null;
+  /** null = every country */ entity_id: number | null;
 }
 type Opt = { id: number; name: string };
 const CATEGORIES = ["road", "cable", "pipeline", "telecom", "civil", "other"];
@@ -21,8 +22,8 @@ const blankLevel = (): LevelInput => ({
 });
 
 /** Workflow designer: header fields, conditions, levels builder (add / remove / reorder) and a live preview by sample amount. */
-export default function WorkflowEditor({ init, initialLevels, roles, users, departments, canEdit }: {
-  init: WorkflowInit; initialLevels: LevelInput[]; roles: Opt[]; users: Opt[]; departments: Opt[]; canEdit: boolean;
+export default function WorkflowEditor({ init, initialLevels, roles, users, departments, countries, canEdit }: {
+  init: WorkflowInit; initialLevels: LevelInput[]; roles: Opt[]; users: Opt[]; departments: Opt[]; countries: { id: number; name: string }[]; canEdit: boolean;
 }) {
   const [levels, setLevels] = useState<LevelInput[]>(initialLevels.length ? initialLevels : [blankLevel()]);
   const [type, setType] = useState(init.document_type || "sub_invoice");
@@ -59,6 +60,9 @@ export default function WorkflowEditor({ init, initialLevels, roles, users, depa
           <Field label="Maximum amount" hint="Applies when amount is below"><Input name="condition_max_amount" type="number" step="any" min="0" defaultValue={init.condition_max_amount ?? ""} disabled={!canEdit} /></Field>
           <Field label="Department"><Select name="condition_department_id" defaultValue={init.condition_department_id ?? ""} placeholder="Any" disabled={!canEdit} options={departments.map((d) => ({ value: d.id, label: d.name }))} /></Field>
           <Field label="Project category"><Select name="condition_project_category" defaultValue={init.condition_project_category ?? ""} placeholder="Any" disabled={!canEdit} options={CATEGORIES.map((c) => ({ value: c, label: c }))} /></Field>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-4">
+          <Field label="Country" hint="Amount limits are in that country's currency"><Select name="entity_id" defaultValue={init.entity_id ?? ""} placeholder="All countries" disabled={!canEdit} options={countries.map((c) => ({ value: c.id, label: c.name }))} /></Field>
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
           <input type="hidden" name="is_active" value="off" /><input type="checkbox" name="is_active" value="on" defaultChecked={init.is_active} disabled={!canEdit} />Active

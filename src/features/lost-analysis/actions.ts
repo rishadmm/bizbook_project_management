@@ -4,6 +4,8 @@ import { getDb } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { ENUMS } from "@/lib/status";
 import { requirePermission } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { entityOfLoss } from "@/lib/entities";
 import { hasOpenRequest, submitForApproval } from "@/lib/approvals/engine";
 
 const str = (f: FormData, k: string): string | null => String(f.get(k) ?? "").trim() || null;
@@ -14,6 +16,7 @@ export async function saveLossAnalysis(form: FormData): Promise<void> {
   const id = Number(form.get("id"));
   const row = getDb().prepare("SELECT id, tender_id, status FROM loss_analyses WHERE id = ?").get(id) as { id: number; tender_id: number; status: string } | undefined;
   if (!row) throw new Error("Loss analysis not found");
+  assertUserEntity(user, entityOfLoss(id), "Loss analysis");
   const reason = str(form, "primary_reason") ?? "other";
   const requested = str(form, "status") ?? "open";
   if (!(reason in ENUMS.lossReason)) throw new Error("Invalid reason");

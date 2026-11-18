@@ -11,6 +11,9 @@ import { InvoicesTab, DelaysTab } from "@/features/projects/components/tabs3";
 import { BudgetTab, ProgressTab, SubcontractsTab } from "@/features/projects/components/tabs2";
 import { MapTab, OverviewTab, StagesTab, SubProjectsTab } from "@/features/projects/components/tabs1";
 import { requirePage } from "@/lib/auth";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
 
 type SP = { tab?: string; edit?: string; stage?: string; sub?: string; status?: string };
 
@@ -21,6 +24,7 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
   const id = Number(idStr);
   const project = Number.isInteger(id) ? getProjectRow(id) : undefined;
   if (!project) notFound();
+  const rec = await assertRecordAccess(project.entity_id);
 
   const metrics = getProjectMetrics(id);
   const stages = getStages(id, metrics);
@@ -42,7 +46,8 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
   const base = `/projects/${id}`;
 
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="project" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader
         breadcrumbs={[{ label: "Projects", href: "/projects" }, ...(project.parent_id ? [{ label: project.parent_code ?? "Parent", href: `/projects/${project.parent_id}` }] : []), { label: project.code }]}
         title={`${project.code} · ${project.name}`}
@@ -69,6 +74,6 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
       {tab === "delays" && <DelaysTab project={project} stages={stages} />}
       {tab === "documents" && <AttachmentsPanel entityType="project" entityId={id} revalidate={base} />}
       {tab === "activity" && <ActivityTimeline entityType="project" entityId={id} />}
-    </>
+    </CurrencyProvider>
   );
 }

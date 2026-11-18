@@ -2,6 +2,7 @@
 import { AlertTriangle, ClipboardList, Copy, ExternalLink, FileText, X } from "lucide-react";
 import { useState } from "react";
 import { formatMoney } from "@/lib/format";
+import { useCurrency } from "@/components/CurrencyProvider";
 import { RESP_COLOR, RESP_LABEL, STATUS_COLOR } from "../calc";
 import type { ClientMode, OpsSegment, SegDerived } from "../types";
 import { Bar, Dot, Sparkline, StatusPill, shortDate, slipColor, slipText } from "./bits";
@@ -9,6 +10,7 @@ import { Bar, Dot, Sparkline, StatusPill, shortDate, slipColor, slipText } from 
 const fmtQ = (v: number) => (v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(v < 10 ? 2 : 1));
 
 export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onClose, client }: { seg: OpsSegment; d: SegDerived; color: string; projectCode: string; portalUrl: string | null; onClose: () => void; client?: ClientMode }) {
+  const currency = useCurrency();
   const [copied, setCopied] = useState(false);
   const qty = seg.qty && seg.qty > 0 ? seg.qty : null;
   const unitQty = (pctWk: number) => (qty ? (pctWk / 100) * qty : null);
@@ -59,7 +61,7 @@ export default function SegmentCard({ seg, d, color, projectCode, portalUrl, onC
         {seg.assignmentId && !client && (
           <div className="grid grid-cols-3 gap-2 text-center">
             {([["Contract", seg.contractValue], ["Certified", seg.invoices.certified], ["Paid", seg.invoices.paid]] as const).map(([l, v]) => (
-              <div key={l} className="om-soft rounded-xl px-2 py-1.5"><div className="om-h">{l}</div><div className="om-num text-[12px] font-extrabold">{formatMoney(v, { compact: true })}</div></div>
+              <div key={l} className="om-soft rounded-xl px-2 py-1.5"><div className="om-h">{l}</div><div className="om-num text-[12px] font-extrabold">{formatMoney(v, { compact: true, currency })}</div></div>
             ))}
           </div>
         )}

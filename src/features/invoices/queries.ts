@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { getEntityById } from "@/lib/entities";
 import { getActivity, type ActivityRow } from "@/lib/activity";
 import { getApprovalStatus, type ApprovalStatus } from "@/lib/approvals/engine";
 import { UPLOAD_DIR, listAttachments } from "@/lib/files";
@@ -12,22 +13,22 @@ export type InvoiceQueueRow = SubInvoice & {
   contract_value: number; advance_pct: number; retention_pct: number; files: { id: number; filename: string }[];
 };
 
-export function listInvoices(status?: string): InvoiceQueueRow[] {
+export function listInvoices(entityId: number, status?: string): InvoiceQueueRow[] {
   const db = getDb();
   const rows = db.prepare(`
     SELECT i.*, a.code AS assignment_code, a.contract_value, a.advance_pct, a.retention_pct, p.code AS project_code, p.name AS project_name,
       s.id AS subcontractor_id, s.name AS subcontractor_name
     FROM sub_invoices i JOIN assignments a ON a.id = i.assignment_id JOIN projects p ON p.id = i.project_id
     JOIN subcontractors s ON s.id = a.subcontractor_id
-    ${status ? "WHERE i.status = ?" : ""} ORDER BY i.invoice_date DESC, i.id DESC`).all(...(status ? [status] : [])) as Omit<InvoiceQueueRow, "files">[];
+    WHERE p.entity_id = ? ${status ? "AND i.status = ?" : ""} ORDER BY i.invoice_date DESC, i.id DESC`).all(...(status ? [entityId, status] : [entityId])) as Omit<InvoiceQueueRow, "files">[];
   const att = db.prepare("SELECT id, filename FROM attachments WHERE entity_type='sub_invoice' AND entity_id = ? ORDER BY id");
   return rows.map((r) => ({ ...r, files: att.all(r.id) as { id: number; filename: string }[] }));
 }
 
-export function invoiceTotals(): Record<InvoiceStatus, { count: number; amount: number }> {
+export function invoiceTotals(entityId: number): Record<InvoiceStatus, { count: number; amount: number }> {
   const out = {} as Record<InvoiceStatus, { count: number; amount: number }>;
   for (const s of ["submitted", "under_review", "certified", "approved", "paid", "rejected"] as InvoiceStatus[]) out[s] = { count: 0, amount: 0 };
-  const rows = getDb().prepare("SELECT status, COUNT(*) c, COALESCE(SUM(CASE WHEN status IN ('submitted','under_review','rejected') THEN claimed_amount WHEN status='paid' THEN paid_amount ELSE certified_amount END),0) a FROM sub_invoices GROUP BY status").all() as { status: InvoiceStatus; c: number; a: number }[];
+  const rows = getDb().prepare("SELECT status, COUNT(*) c, COALESCE(SUM(CASE WHEN status IN ('submitted','under_review','rejected') THEN claimed_amount WHEN status='paid' THEN paid_amount ELSE certified_amount END),0) a FROM sub_invoices WHERE project_id IN (SELECT id FROM projects WHERE entity_id = ?) GROUP BY status").all(entityId) as { status: InvoiceStatus; c: number; a: number }[];
   for (const r of rows) if (out[r.status]) out[r.status] = { count: r.c, amount: r.a };
   return out;
 }
@@ -40,7 +41,9 @@ export interface InvoiceDetail {
   subcontractor: { id: number; code: string | null; name: string; trade: string | null; address: string | null; tax_no: string | null; trade_license_no: string | null; contact_person: string | null; email: string | null; phone: string | null; bank_name: string | null; iban_masked: string | null };
   project: { id: number; code: string; name: string; location: string | null; region: string | null; manager_name: string | null; cost_centre: string };
   client: { id: number; name: string; address: string | null } | null;
-  company: { name: string; address: string; trn: string };
+  company: { name: string; address: string; trn: string; tax_label: string };
+  /** the country (entity) that issued/owns the invoice: currency, VAT, tax label */
+  entity: { id: number; code: string; country: string; currency: string; flag: string | null; vat_rate: number; map_center: string | null };
   assignment: { id: number; code: string | null; scope: string | null; contract_value: number; payment_terms: string | null; payment_days: number; retention_pct: number; advance_pct: number; quantity: number | null; quantity_unit: string | null; status: string; stage_id: number | null };
   stages: { id: number; code: string | null; name: string }[];
   progress: ProgressReport[];
@@ -70,8 +73,9 @@ export function getInvoiceDetail(id: number, opts: { hashes?: boolean } = {}): I
   const lines = db.prepare("SELECT * FROM sub_invoice_lines WHERE invoice_id = ? ORDER BY line_no, id").all(id) as SubInvoiceLine[];
   const asg = db.prepare("SELECT * FROM assignments WHERE id = ?").get(inv.assignment_id) as InvoiceDetail["assignment"] & { subcontractor_id: number };
   const sub = db.prepare("SELECT * FROM subcontractors WHERE id = ?").get(asg.subcontractor_id) as Record<string, string | number | null>;
-  const prj = db.prepare(`SELECT p.id, p.code, p.name, p.location, p.region, p.client_id, u.name AS manager_name FROM projects p LEFT JOIN users u ON u.id = p.manager_id WHERE p.id = ?`).get(inv.project_id) as
-    { id: number; code: string; name: string; location: string | null; region: string | null; client_id: number | null; manager_name: string | null };
+  const prj = db.prepare(`SELECT p.id, p.code, p.name, p.location, p.region, p.client_id, p.entity_id, u.name AS manager_name FROM projects p LEFT JOIN users u ON u.id = p.manager_id WHERE p.id = ?`).get(inv.project_id) as
+    { id: number; code: string; name: string; location: string | null; region: string | null; client_id: number | null; entity_id: number; manager_name: string | null };
+  const ent = getEntityById(prj.entity_id)!;
   const client = prj.client_id ? (db.prepare("SELECT id, name, address FROM clients WHERE id = ?").get(prj.client_id) as { id: number; name: string; address: string | null } | undefined) ?? null : null;
   const stageIds = [...new Set([asg.stage_id, ...lines.map((l) => l.stage_id)].filter((x): x is number => !!x))];
   const stages = stageIds.length ? (db.prepare(`SELECT id, code, name FROM stages WHERE id IN (${stageIds.map(() => "?").join(",")}) ORDER BY sort, id`).all(...stageIds) as InvoiceDetail["stages"]) : [];
@@ -111,7 +115,8 @@ export function getInvoiceDetail(id: number, opts: { hashes?: boolean } = {}): I
       bank_name: sub.bank_name as string | null, iban_masked: maskIban(sub.iban as string | null),
     },
     project: { id: prj.id, code: prj.code, name: prj.name, location: prj.location, region: prj.region, manager_name: prj.manager_name, cost_centre: prj.code },
-    client, company: { name: getSetting("company_name"), address: getSetting("company_address"), trn: getSetting("company_trn") },
+    client, company: { name: ent.legal_name, address: ent.address ?? "", trn: ent.tax_no ?? "", tax_label: ent.tax_label },
+    entity: { id: ent.id, code: ent.code, country: ent.country, currency: ent.currency, flag: ent.flag, vat_rate: ent.vat_rate, map_center: ent.map_center },
     assignment: { id: asg.id, code: asg.code, scope: asg.scope, contract_value: asg.contract_value, payment_terms: asg.payment_terms, payment_days: asg.payment_days, retention_pct: asg.retention_pct, advance_pct: asg.advance_pct, quantity: asg.quantity, quantity_unit: asg.quantity_unit, status: asg.status, stage_id: asg.stage_id },
     stages, progress, statement, attachments, approval, paymentApproval, trail, people, activity, kpis, certifiedState,
   };
@@ -122,6 +127,6 @@ function hashFile(stored: string): string | null {
 }
 
 /** Minimal header used by list pages and breadcrumbs. */
-export function getInvoiceHeader(id: number): { id: number; invoice_no: string | null; project_id: number } | undefined {
-  return getDb().prepare("SELECT id, invoice_no, project_id FROM sub_invoices WHERE id = ?").get(id) as { id: number; invoice_no: string | null; project_id: number } | undefined;
+export function getInvoiceHeader(id: number): { id: number; invoice_no: string | null; project_id: number; entity_id: number } | undefined {
+  return getDb().prepare("SELECT i.id, i.invoice_no, i.project_id, p.entity_id FROM sub_invoices i JOIN projects p ON p.id = i.project_id WHERE i.id = ?").get(id) as { id: number; invoice_no: string | null; project_id: number; entity_id: number } | undefined;
 }

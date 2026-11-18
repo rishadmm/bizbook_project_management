@@ -6,6 +6,7 @@ import { hasOpenRequest } from "@/lib/approvals/engine";
 import type { AuthUser } from "@/lib/auth";
 import { formatDate, formatMoney, formatNumber, formatRatio, getCurrency, todayISO } from "@/lib/format";
 import { getDelayAttribution, getSubcontractorPerformance } from "@/lib/metrics";
+import { getEntityById } from "@/lib/entities";
 import { statusLabel, statusOptions, statusHex } from "@/lib/status";
 import { deleteIssue, issueCertificate, rejectCertificate, setIssueStatus } from "../actions";
 import { InvoiceActionBar } from "@/features/invoices/components/InvoiceActionBar";
@@ -27,10 +28,10 @@ export function InvoicesTab({ project, me }: { project: ProjectRow; me: AuthUser
   return (
     <div className="space-y-5">
       <CardSection title="Subcontractor invoices" subtitle={`Claimed ${formatMoney(tot.claimed, { compact: true })} · certified ${formatMoney(tot.cert, { compact: true })} · paid ${formatMoney(tot.paid, { compact: true })}`} flush
-        actions={<ModalButton label="Record invoice" title="Record invoice" variant="primary" size="sm" wide icon={<Plus size={14} className="mr-1" />}><InvoiceForm projectId={project.id} assignments={asg} today={todayISO()} boq={Object.fromEntries(asg.map((a) => [a.value, getAssignmentBoq(a.value)]))} /></ModalButton>}>
+        actions={<ModalButton label="Record invoice" title="Record invoice" variant="primary" size="sm" wide icon={<Plus size={14} className="mr-1" />}><InvoiceForm projectId={project.id} assignments={asg} today={todayISO()} boq={Object.fromEntries(asg.map((a) => [a.value, getAssignmentBoq(a.value)]))} currency={getCurrency()} vatRate={getEntityById(project.entity_id)?.vat_rate ?? 5} /></ModalButton>}>
         {invoices.length === 0 ? <div className="p-4"><EmptyState title="No invoices" /></div> : (
           <Table>
-            <THead><TR><TH>Invoice</TH><TH>Subcontractor</TH><TH>Date / period</TH><TH num>Claimed (AED)</TH><TH num>Certified</TH><TH num>Retention</TH><TH num>Adv. recovery</TH><TH num>Net payable</TH><TH num>Paid</TH><TH>Status</TH><TH>Actions</TH></TR></THead>
+            <THead><TR><TH>Invoice</TH><TH>Subcontractor</TH><TH>Date / period</TH><TH num>Claimed ({getCurrency()})</TH><TH num>Certified</TH><TH num>Retention</TH><TH num>Adv. recovery</TH><TH num>Net payable</TH><TH num>Paid</TH><TH>Status</TH><TH>Actions</TH></TR></THead>
             <TBody>
               {invoices.map((i) => (
                 <ClickRow key={i.id} href={`/invoices/${i.id}`}>

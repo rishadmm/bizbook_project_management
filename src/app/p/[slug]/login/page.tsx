@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, Info, LifeBuoy } from "lucide-react";
 import AuthShell from "@/features/portal/components/AuthShell";
-import { getDb, getSetting } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { getEntityById } from "@/lib/entities";
 import { safeNext } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
 import { getPortalSession, portalAvailable } from "@/lib/portal-auth";
@@ -20,7 +21,7 @@ export default async function PortalLoginPage({ params, searchParams }: { params
   const db = getDb();
   const sub = db.prepare("SELECT * FROM subcontractors WHERE portal_slug = ?").get(slug) as Subcontractor | undefined;
   if (!sub) notFound();
-  const tenant = getSetting("company_name", "Al Noor Infrastructure LLC");
+  const tenant = getEntityById(sub.entity_id)?.legal_name ?? "";
   const s = await getPortalSession();
   if (s && s.sub.id === sub.id) redirect(s.user.mustChange ? `/p/${slug}/change-password` : `/p/${slug}`);
   const available = portalAvailable(sub);

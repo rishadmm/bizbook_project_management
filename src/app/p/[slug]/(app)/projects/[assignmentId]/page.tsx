@@ -11,7 +11,7 @@ import { getAssignmentBoq } from "@/features/invoices/lines";
 import { canWorkOn, getAssignment, listCertificates, listInvoices, listIssues, listSharedDocuments } from "@/features/portal/data";
 import { companySegments, detailMapFeatures, daysLabel, manpowerSeries, qtySeries, scheduleHealth } from "@/features/portal/ops";
 import { ManpowerChart, QtyChart } from "@/features/portal/components/PortalCharts";
-import { RagBadge } from "@/features/portal/components/bits";
+import { RagBadge, TenderSource } from "@/features/portal/components/bits";
 
 export const metadata = { title: "Subcontract" };
 const sizeLabel = (n: number | null) => (!n ? "" : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
@@ -35,7 +35,7 @@ export default async function PortalProjectDetail({ params }: { params: Promise<
   return (
     <>
       <PageHeader title={`${a.code ?? `Subcontract #${a.id}`} · ${a.project_name}`} breadcrumbs={[{ label: "Projects", href: `/p/${slug}/projects` }, { label: a.code ?? `#${a.id}` }]}
-        description={`${a.project_code}${a.stage_name ? ` · Stage ${a.stage_code ?? ""} ${a.stage_name}` : ""}`} badges={<><StatusBadge kind="assignmentStatus" value={a.status} />{h && <RagBadge rag={h.rag} />}</>}
+        description={<><span>{a.project_code}{a.stage_name ? ` · Stage ${a.stage_code ?? ""} ${a.stage_name}` : ""}</span><span className="ml-3"><TenderSource slug={slug} a={a} link={portalCan(s.user.role, "tenders")} /></span></>} badges={<><StatusBadge kind="assignmentStatus" value={a.status} />{h && <RagBadge rag={h.rag} />}</>}
         actions={canWorkOn(a) && can("progress_submit") ? <LinkButton href={`/p/${slug}/progress/new?assignment=${a.id}`} variant="primary"><Plus size={15} />Progress update</LinkButton> : undefined} />
 
       <CardSection title="Scope & terms" className="mb-5">

@@ -3,22 +3,25 @@ import { AlertTriangle, Plus, Star } from "lucide-react";
 import { Badge, CardSection, EmptyState, Input, LinkButton, PageHeader, Select, Stat, StatusBadge, Table, TBody, TD, TH, THead, TR, Button } from "@/components/ui";
 import { statusOptions } from "@/lib/status";
 import { listSubcontractors } from "@/features/subcontractors/queries";
-import { can, requirePage } from "@/lib/auth";
+import { can, getActiveEntity, requirePage } from "@/lib/auth";
+import SubcontractorsNav from "@/features/supplier-registration/components/SubcontractorsNav";
 
 type SP = { status?: string; q?: string };
 
 export default async function SubcontractorsPage({ searchParams }: { searchParams: Promise<SP> }) {
   const me = await requirePage("subcontractors");
   const sp = await searchParams;
-  const all = listSubcontractors();
+  const entity = await getActiveEntity();
+  const all = listSubcontractors(entity.id);
   const q = (sp.q ?? "").toLowerCase();
   const rows = all.filter((s) => (!sp.status || s.status === sp.status) &&
     (!q || `${s.name} ${s.code ?? ""} ${s.trade ?? ""}`.toLowerCase().includes(q)));
   const warn = all.filter((s) => s.expired_docs + s.expiring_docs > 0).length;
   return (
     <>
-      <PageHeader title="Subcontractors" description="Directory, onboarding and performance of subcontractors."
+      <PageHeader title="Subcontractors" description={`Directory, onboarding and performance of subcontractors · ${entity.country}.`}
         actions={can(me, "subcontractors", "create") ? <LinkButton href="/subcontractors/new" variant="primary"><Plus size={15} />New subcontractor</LinkButton> : undefined} />
+      <SubcontractorsNav active="all" user={me} entityId={entity.id} />
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Subcontractors" value={all.length} />
         <Stat label="Approved" value={all.filter((s) => s.status === "approved").length} tone="good" />

@@ -6,6 +6,10 @@ import { syncInvoiceCost } from "../metrics";
 import type { ModuleKey } from "../permissions";
 import type { ApprovalDocType, EntityType } from "../types";
 import { convertTenderToProject, applyRevisionSubmitted, type WonInput } from "../../features/tenders/conversion";
+import { applyApproval, logSub, type ApprovalPayload } from "../../features/supplier-registration/core";
+import { applyPublish, logRfx, publishBlockers, getRfx } from "../../features/procurement/rfx-core";
+import { applyAward, awardBlockers, awardExcludedApprovers } from "../../features/procurement/eval-core";
+import { appBaseUrl } from "../mailer";
 
 export interface DocInfo {
   ref: string; title: string; amount: number; departmentId: number | null; projectId: number | null; url: string;
@@ -24,6 +28,10 @@ export interface RegistryEntry {
   onRejected(id: number, ctx: HandlerCtx): void;
   onReturned?(id: number, ctx: HandlerCtx): void;
   onCancelled?(id: number, ctx: HandlerCtx): void;
+  /** users that may never decide this document (separation of duties, e.g. the person who recommended the bidder) */
+  excludedApprovers?(id: number): number[];
+  /** when nobody but the requester qualifies for the first level, assign it to the super administrators instead of failing */
+  escalateFirstLevel?: boolean;
 }
 
 export function logEntity(entityType: EntityType, entityId: number, action: string, message: string, userId: number | null): void {
@@ -106,16 +114,29 @@ export const REGISTRY: Record<ApprovalDocType, RegistryEntry> = {
   subcontractor_onboarding: {
     type: "subcontractor_onboarding", label: "Subcontractor onboarding", module: "subcontractors", submitPermission: ["subcontractors", "approve"],
     getDocument(id) {
-      const s = one<{ name: string; code: string | null }>("SELECT name, code FROM subcontractors WHERE id = ?", id); if (!s) return null;
-      return { ref: s.code ?? `SUB-${id}`, title: `Onboarding of ${s.name}`, amount: 0, departmentId: null, projectId: null, url: `/subcontractors/${id}?tab=onboarding`, entity: ["subcontractor", id] };
+      const s = one<{ name: string; code: string | null; registration_status: string; submitted_at: string | null; registration_no: string | null }>("SELECT name, code, registration_status, submitted_at, registration_no FROM subcontractors WHERE id = ?", id); if (!s) return null;
+      const reg = s.registration_status === "under_review" && !!s.submitted_at;
+      return { ref: s.registration_no ?? s.code ?? `SUB-${id}`, title: `${reg ? "Registration of" : "Onboarding of"} ${s.name}`, amount: 0, departmentId: null, projectId: null,
+        url: reg ? `/subcontractors/${id}/registration` : `/subcontractors/${id}?tab=onboarding`, entity: ["subcontractor", id] };
     },
+    // accepts either a completed onboarding checklist (internal onboarding) or an accepted supplier registration (under review, no open query)
     canSubmit(id) {
+      const s = one<{ registration_status: string; submitted_at: string | null }>("SELECT registration_status, submitted_at FROM subcontractors WHERE id = ?", id);
+      if (s && s.registration_status === "under_review" && s.submitted_at) {
+        const q = one<{ c: number }>("SELECT COUNT(*) c FROM registration_items WHERE subcontractor_id = ? AND status = 'query'", id)!.c;
+        return q > 0 ? "Resolve the queried items (or refer the registration back) before approving." : null;
+      }
+      if (s && ["draft", "submitted", "referred_back", "rejected"].includes(s.registration_status)) return "The supplier registration has to be under review first (open the Registration tab).";
       const open = one<{ c: number }>("SELECT COUNT(*) c FROM onboarding_checklist WHERE subcontractor_id = ? AND done = 0", id)!.c;
       return open > 0 ? "Complete the onboarding checklist first." : null;
     },
-    onApproved: (id) => { run("UPDATE subcontractors SET status = 'approved' WHERE id = ?", id); },
-    onRejected: () => { /* stays onboarding */ },
-    onReturned: () => { /* stays onboarding */ },
+    onApproved(id, ctx) {
+      const p = ctx.payload as Partial<ApprovalPayload>;
+      if (p.registration) { applyApproval(getDb(), id, p as ApprovalPayload, ctx.requestedBy ?? ctx.actorId); return; }
+      run("UPDATE subcontractors SET status = 'approved', registration_status = CASE WHEN registration_status IN ('under_review', 'submitted') THEN 'approved' ELSE registration_status END WHERE id = ?", id);
+    },
+    onRejected: (id, ctx) => { if ((ctx.payload as Partial<ApprovalPayload>).registration) logSub(getDb(), id, "approval", `Registration approval rejected${ctx.comment ? `: ${ctx.comment}` : ""}; the registration stays under review`, ctx.actorId); },
+    onReturned: (id, ctx) => { if ((ctx.payload as Partial<ApprovalPayload>).registration) logSub(getDb(), id, "approval", `Registration approval returned${ctx.comment ? `: ${ctx.comment}` : ""}; the registration stays under review`, ctx.actorId); },
   },
   subcontract_award: {
     type: "subcontract_award", label: "Subcontract award", module: "subcontractors", submitPermission: ["subcontractors", "edit"],
@@ -185,6 +206,31 @@ export const REGISTRY: Record<ApprovalDocType, RegistryEntry> = {
     onRejected: (id) => { run("DELETE FROM project_cost_requests WHERE id = ? AND status = 'pending'", id); },
     onReturned: (id) => { run("DELETE FROM project_cost_requests WHERE id = ? AND status = 'pending'", id); },
     onCancelled: (id) => { run("DELETE FROM project_cost_requests WHERE id = ? AND status = 'pending'", id); },
+  },
+  rfx_publish: {
+    type: "rfx_publish", label: "Supplier tender publication", module: "procurement", submitPermission: ["procurement", "publish"], escalateFirstLevel: true,
+    getDocument(id) {
+      const t = getRfx(getDb(), id); if (!t) return null;
+      return { ref: t.code, title: `Publish supplier tender: ${t.title}`, amount: t.estimate ?? 0, departmentId: null, projectId: t.project_id, url: `/procurement/${id}?tab=approvals`, entity: ["rfx", id] };
+    },
+    canSubmit(id) { const t = getRfx(getDb(), id); return t ? publishBlockers(getDb(), t)[0] ?? null : "Supplier tender not found"; },
+    onApproved(id, ctx) { applyPublish(getDb(), id, { actorId: ctx.actorId, baseUrl: typeof ctx.payload.base_url === "string" ? ctx.payload.base_url : appBaseUrl() }); },
+    onRejected(id, ctx) { run("UPDATE rfx_tenders SET status = 'draft' WHERE id = ? AND status = 'pending_approval'", id); logRfx(getDb(), id, "approval", `Publication rejected${ctx.comment ? `: ${ctx.comment}` : ""}; back to draft`, ctx.actorId); },
+    onReturned(id, ctx) { run("UPDATE rfx_tenders SET status = 'draft' WHERE id = ? AND status = 'pending_approval'", id); logRfx(getDb(), id, "approval", `Publication returned${ctx.comment ? `: ${ctx.comment}` : ""}; back to draft`, ctx.actorId); },
+    onCancelled: (id) => { run("UPDATE rfx_tenders SET status = 'draft' WHERE id = ? AND status = 'pending_approval'", id); },
+  },
+  rfx_award: {
+    type: "rfx_award", label: "Supplier tender award", module: "procurement", submitPermission: ["procurement", "recommend"], escalateFirstLevel: true,
+    getDocument(id) {
+      const t = getRfx(getDb(), id); if (!t) return null;
+      return { ref: t.code, title: `Award supplier tender: ${t.title}`, amount: t.award_value ?? 0, departmentId: null, projectId: t.project_id, url: `/procurement/${id}?tab=approvals`, entity: ["rfx", id] };
+    },
+    canSubmit(id) { const t = getRfx(getDb(), id); return t ? awardBlockers(getDb(), t)[0] ?? null : "Supplier tender not found"; },
+    excludedApprovers: (id) => awardExcludedApprovers(getDb(), id),
+    onApproved(id, ctx) { applyAward(getDb(), id, { actorId: ctx.actorId, baseUrl: typeof ctx.payload.base_url === "string" ? ctx.payload.base_url : appBaseUrl() }); },
+    onRejected(id, ctx) { run("UPDATE rfx_tenders SET status = 'recommended' WHERE id = ? AND status = 'award_pending'", id); logRfx(getDb(), id, "approval", `Award rejected${ctx.comment ? `: ${ctx.comment}` : ""}; back to the recommendation`, ctx.actorId); },
+    onReturned(id, ctx) { run("UPDATE rfx_tenders SET status = 'recommended' WHERE id = ? AND status = 'award_pending'", id); logRfx(getDb(), id, "approval", `Award returned${ctx.comment ? `: ${ctx.comment}` : ""}; back to the recommendation`, ctx.actorId); },
+    onCancelled: (id) => { run("UPDATE rfx_tenders SET status = 'recommended' WHERE id = ? AND status = 'award_pending'", id); },
   },
   loss_analysis: {
     type: "loss_analysis", label: "Loss analysis closure", module: "lost_analysis", submitPermission: ["lost_analysis", "edit"],

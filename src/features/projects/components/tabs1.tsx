@@ -4,6 +4,8 @@ import { CardSection, EmptyState, ModalButton, ProgressBar, Stat, StatusBadge, T
 import { formatDate, formatKm, formatMoney, formatNumber, formatRatio, getCurrency, pct, todayISO } from "@/lib/format";
 import { getProjectSCurve, type ProjectMetrics } from "@/lib/metrics";
 import { statusLabel } from "@/lib/status";
+import { formatLocal } from "@/lib/rfx";
+import { rfxOfProject, stageTenderChips, type StageTenderChip } from "@/features/procurement/queries";
 import { deleteStage } from "../actions";
 import { firstLine, lineLengthKm } from "../geo";
 import { getAssignments, getBudgetByCategory, getChildren, listUsers, type ProjectRow, type StageRowEx } from "../queries";
@@ -30,7 +32,7 @@ export function OverviewTab({ project, stages, metrics }: { project: ProjectRow;
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Contract value" value={formatMoney(project.contract_value, { compact: true })} hint={`Margin ${formatMoney(project.contract_value - project.budget_cost, { compact: true })}`} />
+        <Stat label="Contract value" title={project.contract_value_usd != null ? `≈ USD ${formatNumber(project.contract_value_usd, 2)} (rate ${project.fx_rate_usd?.toFixed(6)}, ${formatDate(project.fx_date)})` : undefined} value={formatMoney(project.contract_value, { compact: true })} hint={`Margin ${formatMoney(project.contract_value - project.budget_cost, { compact: true })}`} />
         <Stat label="Budget (BAC)" value={formatMoney(m.bac, { compact: true })} hint={`EV ${formatMoney(m.ev, { compact: true })} · PV ${formatMoney(m.pv, { compact: true })}`} />
         <Stat label="Actual cost" value={formatMoney(m.ac, { compact: true })} hint={`${m.bac ? pct((m.ac / m.bac) * 100, 0) : "—"} of budget`} tone={m.ac > m.bac ? "bad" : "default"} />
         <Stat label="Committed" value={formatMoney(m.committed, { compact: true })} hint="Subcontract values" />
@@ -56,12 +58,28 @@ export function OverviewTab({ project, stages, metrics }: { project: ProjectRow;
       <CardSection title="Stages" subtitle="Progress vs plan" flush>
         <StageTable stages={stages} projectId={project.id} compact />
       </CardSection>
+      <ProcurementSection projectId={project.id} />
     </div>
   );
 }
 
+/** "Out to tender · RFX-… · closes 12 Dec" / "Awarded via RFX-…" chip of a stage (+ a "Float tender" row action). */
+export function TenderChip({ chip, floatHref }: { chip?: StageTenderChip; floatHref?: string }) {
+  if (!chip && !floatHref) return null;
+  return (
+    <div className="mt-0.5 flex flex-wrap gap-1">
+      {chip && <Link href={`/procurement/${chip.rfxId}`} data-testid="stage-tender-chip" className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${chip.status === "awarded" ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-indigo-50 text-indigo-700 ring-indigo-200"}`}>
+        {chip.status === "awarded" ? `Awarded via ${chip.code}` : `Out to tender · ${chip.code}${chip.closing_at && ["published", "scheduled"].includes(chip.status) ? ` · closes ${formatLocalDay(chip.closing_at)}` : ""}`}</Link>}
+      {floatHref && <Link href={floatHref} className="rounded-full px-2 py-0.5 text-[11px] font-semibold text-primary ring-1 ring-inset ring-primary/30 hover:bg-primary-50">Float tender</Link>}
+    </div>
+  );
+}
+const formatLocalDay = (iso: string) => formatLocal(iso, false).slice(0, 6);
+
 export function StageTable({ stages, projectId, compact, editable }: { stages: StageRowEx[]; projectId: number; compact?: boolean; editable?: boolean }) {
   if (!stages.length) return <div className="p-4"><EmptyState title="No stages yet" description="Create stages manually or split the project route." /></div>;
+  const chips = stageTenderChips(projectId);
+  const assigned = new Set(getAssignments(projectId).filter((a) => a.stage_id && a.status !== "terminated").map((a) => a.stage_id as number));
   const tot = stages.reduce((a, s) => ({ qty: a.qty + (s.planned_quantity || 0), bud: a.bud + (s.budget_amount || 0) }), { qty: 0, bud: 0 });
   return (
     <Table>
@@ -72,7 +90,8 @@ export function StageTable({ stages, projectId, compact, editable }: { stages: S
       <TBody>
         {stages.map((s) => (
           <TR key={s.id}>
-            <TD><Link href={`/projects/${projectId}/stages/${s.id}`} className="font-medium text-blue-700 hover:underline">{s.code ? `${s.code} · ` : ""}{s.name}</Link></TD>
+            <TD><Link href={`/projects/${projectId}/stages/${s.id}`} className="font-medium text-blue-700 hover:underline">{s.code ? `${s.code} · ` : ""}{s.name}</Link>
+              <TenderChip chip={chips.get(s.id)} floatHref={editable && !chips.has(s.id) && !assigned.has(s.id) ? `/procurement/new?project=${projectId}&stages=${s.id}` : undefined} /></TD>
             {!compact && <TD className="whitespace-nowrap text-xs">{s.chainage_from !== null ? `${formatNumber(s.chainage_from, 1)} – ${formatNumber(s.chainage_to, 1)} km` : "—"}</TD>}
             <TD num>{formatNumber(s.planned_quantity, 2)} <span className="text-xs text-slate-400">{s.quantity_unit}</span></TD>
             <TD className="whitespace-nowrap text-xs">{formatDate(s.planned_start)} → {formatDate(s.planned_end)}</TD>
@@ -100,11 +119,24 @@ export function StageTable({ stages, projectId, compact, editable }: { stages: S
 
 /* ------------------------------------------------------------------ Map */
 
+/** Supplier tenders of the project (Overview). */
+export function ProcurementSection({ projectId }: { projectId: number }) {
+  const rows = rfxOfProject(projectId);
+  if (!rows.length) return null;
+  return (
+    <CardSection title="Procurement" subtitle={`${rows.length} supplier tender${rows.length === 1 ? "" : "s"}`} flush>
+      <Table><THead><TR><TH>Tender</TH><TH>Status</TH><TH>Closing</TH><TH num>Estimate / award</TH></TR></THead>
+        <TBody>{rows.map((t) => (<TR key={t.id}><TD><Link href={`/procurement/${t.id}`} className="font-bold text-primary-dark hover:underline">{t.code}</Link><div className="max-w-[320px] truncate text-xs text-slate-500">{t.title}</div></TD><TD><StatusBadge kind="rfxStatus" value={t.status} /></TD>
+          <TD className="whitespace-nowrap text-xs">{formatLocal(t.closing_at)}</TD><TD num>{formatMoney(t.status === "awarded" ? t.award_value : t.estimate, { compact: true })}</TD></TR>))}</TBody></Table>
+    </CardSection>
+  );
+}
+
 export async function MapTab({ project, stages, edit }: { project: ProjectRow; stages: StageRowEx[]; edit: boolean }) {
   const asg = getAssignments(project.id);
   const subsByStage = new Map<number, string[]>();
   asg.filter((a) => a.stage_id && a.status !== "terminated").forEach((a) => subsByStage.set(a.stage_id!, [...(subsByStage.get(a.stage_id!) ?? []), a.subcontractor_name]));
-  const features = projectMapFeatures(project, stages, subsByStage, edit);
+  const features = projectMapFeatures(project, stages, subsByStage, edit, stageTenderChips(project.id));
   const line = firstLine(project.geometry);
   return (
     <div className="space-y-4">
@@ -137,7 +169,7 @@ export function StagesTab({ project, stages }: { project: ProjectRow; stages: St
 
 export function SubProjectsTab({ project }: { project: ProjectRow }) {
   const kids = getChildren(project.id);
-  const users = listUsers().map((u) => ({ value: u.id, label: u.name }));
+  const users = listUsers(project.entity_id).map((u) => ({ value: u.id, label: u.name }));
   return (
     <CardSection title="Sub-projects" subtitle={project.parent_id ? `This is itself a sub-project of ${project.parent_code}` : `${kids.length} sub-projects`} flush
       actions={<ModalButton label="New sub-project" title={`New sub-project of ${project.code}`} variant="primary" size="sm" wide icon={<Plus size={14} className="mr-1" />}><SubProjectForm parentId={project.id} users={users} unit={project.quantity_unit} today={todayISO()} /></ModalButton>}>

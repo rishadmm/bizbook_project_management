@@ -467,3 +467,210 @@ CREATE TABLE IF NOT EXISTS client_auth_events (
   ip TEXT, user_agent TEXT, detail TEXT, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cae_client ON client_auth_events(client_id, id);
+
+-- ---------------------------------------------------------------- multi-country operations + USD reporting currency (MULTI_COUNTRY_SPEC)
+CREATE TABLE IF NOT EXISTS currencies (
+  code TEXT PRIMARY KEY, name TEXT NOT NULL, decimals INTEGER NOT NULL DEFAULT 2, symbol TEXT
+);
+CREATE TABLE IF NOT EXISTS entities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE, country TEXT NOT NULL, flag TEXT, legal_name TEXT NOT NULL, short_name TEXT NOT NULL,
+  currency TEXT NOT NULL REFERENCES currencies(code), vat_rate REAL NOT NULL DEFAULT 5, tax_label TEXT NOT NULL DEFAULT 'TRN', tax_no TEXT, cr_no TEXT,
+  address TEXT, phone TEXT, email TEXT, map_center TEXT, timezone TEXT, approval_cost_threshold REAL NOT NULL DEFAULT 50000,
+  doc_prefix TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS fx_rates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL REFERENCES currencies(code), rate_to_usd REAL NOT NULL,
+  effective_date TEXT NOT NULL, source TEXT, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (currency, effective_date)
+);
+CREATE TABLE IF NOT EXISTS user_entities (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_entities_entity ON user_entities(entity_id);
+
+-- ---------------------------------------------------------------- supplier registration + procurement foundation (SUPPLIER_TENDERING_SPEC Part A, SCHEMA_VERSION 9)
+-- New columns on subcontractors / subcontractor_documents are added by migrate.ts (ensureColumn); indexes on them live there as well.
+CREATE TABLE IF NOT EXISTS supplier_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER REFERENCES entities(id), -- NULL = every country
+  code TEXT NOT NULL, name TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT 'Others', active INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_supcat_code ON supplier_categories(COALESCE(entity_id, 0), code);
+CREATE TABLE IF NOT EXISTS subcontractor_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  category_id INTEGER NOT NULL REFERENCES supplier_categories(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'requested', -- requested | approved | declined
+  UNIQUE(subcontractor_id, category_id)
+);
+CREATE TABLE IF NOT EXISTS subcontractor_experience (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  client TEXT, project TEXT, value REAL, currency TEXT, year INTEGER, description TEXT
+);
+CREATE TABLE IF NOT EXISTS subcontractor_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, -- primary | signatory | finance | hse
+  name TEXT, title TEXT, email TEXT, phone TEXT,
+  UNIQUE(subcontractor_id, role)
+);
+CREATE TABLE IF NOT EXISTS registration_doc_types (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER NOT NULL REFERENCES entities(id), code TEXT NOT NULL, name TEXT NOT NULL,
+  mandatory INTEGER NOT NULL DEFAULT 0, needs_expiry INTEGER NOT NULL DEFAULT 0,
+  category_condition TEXT, -- NULL = always; "group:<supplier_categories.group_name>" = only when the supplier requested a category of that group
+  sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, UNIQUE(entity_id, code)
+);
+CREATE TABLE IF NOT EXISTS registration_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  decision TEXT NOT NULL, -- refer_back | approve | reject | resubmit | reopen
+  note TEXT, items_json TEXT, decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL, decided_at TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_regrev_sub ON registration_reviews(subcontractor_id, id);
+-- per-section / per-document reviewer verdicts of the current review round (section keys: company, categories, contacts, hse, experience; documents: doc type code)
+CREATE TABLE IF NOT EXISTS registration_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  item_kind TEXT NOT NULL, item_ref TEXT NOT NULL, status TEXT NOT NULL, -- accepted | query | fixed
+  comment TEXT, reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL, reviewed_at TEXT, fixed_at TEXT,
+  UNIQUE(subcontractor_id, item_kind, item_ref)
+);
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER REFERENCES entities(id), to_email TEXT NOT NULL, to_name TEXT, subject TEXT NOT NULL,
+  body_html TEXT, body_text TEXT, template TEXT, related_type TEXT, related_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued | sent | logged | failed
+  error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_entity ON email_outbox(entity_id, id);
+CREATE TABLE IF NOT EXISTS portal_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  portal_user_id INTEGER REFERENCES portal_users(id) ON DELETE CASCADE, -- NULL = every user of the company
+  kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, href TEXT, read_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pnotif_sub ON portal_notifications(subcontractor_id, read_at);
+CREATE TABLE IF NOT EXISTS portal_password_resets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, portal_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ---------------------------------------------------------------- supplier tendering / RFx (SUPPLIER_TENDERING_SPEC Part B, SCHEMA_VERSION 10)
+-- Entity rule: rfx_tenders is the root (entity_id); templates carry a nullable entity_id (NULL = every country); everything else is a child of its tender / bid / template and never
+-- repeats entity_id. Money columns (rfx_tenders.estimate / award_value, rfx_boq_lines.estimate_rate, rfx_bids.total_amount / discount_amount / vat_amount, rfx_bid_prices.unit_rate / amount) get the
+-- USD layer (fx-tables.ts). New assignment columns (source, rfx_id, rfx_bid_id) are added by migrate.ts.
+CREATE TABLE IF NOT EXISTS rfx_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER REFERENCES entities(id), name TEXT NOT NULL, description TEXT, active INTEGER NOT NULL DEFAULT 1,
+  evaluation_method TEXT NOT NULL DEFAULT 'lowest_compliant', -- lowest_compliant | weighted | two_envelope_weighted
+  tech_weight REAL NOT NULL DEFAULT 70, commercial_weight REAL NOT NULL DEFAULT 30, tech_pass_mark REAL NOT NULL DEFAULT 70,
+  bid_bond_pct REAL NOT NULL DEFAULT 0, performance_bond_pct REAL NOT NULL DEFAULT 0, default_validity_days INTEGER NOT NULL DEFAULT 90,
+  min_bidders INTEGER NOT NULL DEFAULT 3, clarification_days_before_close INTEGER NOT NULL DEFAULT 7, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS rfx_template_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, template_id INTEGER NOT NULL REFERENCES rfx_templates(id) ON DELETE CASCADE, step_key TEXT NOT NULL, name TEXT NOT NULL,
+  kind TEXT NOT NULL, gate TEXT NOT NULL DEFAULT 'pass_fail', weight REAL, pass_mark REAL, evaluator_role TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS rfx_template_criteria (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, step_id INTEGER NOT NULL REFERENCES rfx_template_steps(id) ON DELETE CASCADE, criterion TEXT NOT NULL, max_score REAL NOT NULL DEFAULT 10, guidance TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS rfx_template_requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, template_id INTEGER NOT NULL REFERENCES rfx_templates(id) ON DELETE CASCADE, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'document',
+  mandatory INTEGER NOT NULL DEFAULT 1, envelope TEXT NOT NULL DEFAULT 'technical', step_id INTEGER REFERENCES rfx_template_steps(id) ON DELETE SET NULL, instructions TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS rfx_tenders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id INTEGER NOT NULL REFERENCES entities(id), code TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, scope_kind TEXT NOT NULL DEFAULT 'stages', -- project | subproject | stages
+  category_id INTEGER REFERENCES supplier_categories(id), procedure TEXT NOT NULL DEFAULT 'open', -- open | selective
+  template_id INTEGER REFERENCES rfx_templates(id) ON DELETE SET NULL,
+  evaluation_method TEXT NOT NULL DEFAULT 'lowest_compliant', tech_weight REAL NOT NULL DEFAULT 70, commercial_weight REAL NOT NULL DEFAULT 30, tech_pass_mark REAL NOT NULL DEFAULT 70, min_bidders INTEGER NOT NULL DEFAULT 3,
+  estimate REAL, publish_at TEXT, clarification_deadline TEXT, site_visit_at TEXT, site_visit_note TEXT, closing_at TEXT, opening_at TEXT, validity_days INTEGER NOT NULL DEFAULT 90,
+  bid_bond_pct REAL NOT NULL DEFAULT 0, performance_bond_pct REAL NOT NULL DEFAULT 0, advance_pct REAL NOT NULL DEFAULT 10, retention_pct REAL NOT NULL DEFAULT 5, payment_days INTEGER NOT NULL DEFAULT 30,
+  payment_terms TEXT, contract_start TEXT, contract_end TEXT,
+  owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, status TEXT NOT NULL DEFAULT 'draft',
+  awarded_bid_id INTEGER, assignment_id INTEGER, cancel_reason TEXT, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  award_value REAL, recommended_bid_id INTEGER, recommendation_note TEXT, recommended_by INTEGER, recommended_at TEXT, published_at TEXT, closed_at TEXT, awarded_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_entity ON rfx_tenders(entity_id, status);
+CREATE INDEX IF NOT EXISTS idx_rfx_project ON rfx_tenders(project_id);
+CREATE TABLE IF NOT EXISTS rfx_scope (rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, stage_id INTEGER NOT NULL REFERENCES stages(id) ON DELETE CASCADE, PRIMARY KEY (rfx_id, stage_id));
+CREATE INDEX IF NOT EXISTS idx_rfx_scope_stage ON rfx_scope(stage_id);
+CREATE TABLE IF NOT EXISTS rfx_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, step_key TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
+  gate TEXT NOT NULL DEFAULT 'pass_fail', weight REAL, pass_mark REAL, evaluator_role TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_steps ON rfx_steps(rfx_id, sort);
+CREATE TABLE IF NOT EXISTS rfx_criteria (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, step_id INTEGER NOT NULL REFERENCES rfx_steps(id) ON DELETE CASCADE, criterion TEXT NOT NULL, max_score REAL NOT NULL DEFAULT 10, guidance TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS rfx_requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'document',
+  mandatory INTEGER NOT NULL DEFAULT 1, envelope TEXT NOT NULL DEFAULT 'technical', step_id INTEGER REFERENCES rfx_steps(id) ON DELETE SET NULL, instructions TEXT, sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_req ON rfx_requirements(rfx_id, sort);
+CREATE TABLE IF NOT EXISTS rfx_boq_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, item_no TEXT NOT NULL, description TEXT NOT NULL, unit TEXT,
+  quantity REAL NOT NULL DEFAULT 1, stage_id INTEGER REFERENCES stages(id) ON DELETE SET NULL, estimate_rate REAL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_boq ON rfx_boq_lines(rfx_id, sort);
+CREATE TABLE IF NOT EXISTS rfx_committee (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member', -- chair | member | secretary | observer
+  steps TEXT, -- JSON array of rfx_steps ids the member evaluates (NULL = every step)
+  coi_declared_at TEXT, coi_conflict INTEGER NOT NULL DEFAULT 0, coi_note TEXT, UNIQUE (rfx_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS rfx_invitations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  invited_at TEXT, viewed_at TEXT, intent TEXT NOT NULL DEFAULT 'pending', decline_reason TEXT, source TEXT NOT NULL DEFAULT 'eligible', -- eligible | invited
+  UNIQUE (rfx_id, subcontractor_id)
+);
+CREATE TABLE IF NOT EXISTS rfx_clarifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, subcontractor_id INTEGER REFERENCES subcontractors(id) ON DELETE SET NULL,
+  question TEXT NOT NULL, asked_at TEXT NOT NULL, answer TEXT, answered_by INTEGER REFERENCES users(id) ON DELETE SET NULL, published_at TEXT
+);
+CREATE TABLE IF NOT EXISTS rfx_addenda (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, no INTEGER NOT NULL, title TEXT NOT NULL, description TEXT,
+  attachment_id INTEGER REFERENCES attachments(id) ON DELETE SET NULL, new_closing_at TEXT, issued_by INTEGER REFERENCES users(id) ON DELETE SET NULL, issued_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rfx_addendum_acks (
+  addendum_id INTEGER NOT NULL REFERENCES rfx_addenda(id) ON DELETE CASCADE, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE, acked_at TEXT NOT NULL,
+  acked_by_name TEXT, PRIMARY KEY (addendum_id, subcontractor_id)
+);
+CREATE TABLE IF NOT EXISTS rfx_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, -- tech_opening | commercial_opening | opening | bafo_request | clarification_request
+  at TEXT NOT NULL, attendees_json TEXT, minutes TEXT, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, data_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_events ON rfx_events(rfx_id, kind);
+CREATE TABLE IF NOT EXISTS rfx_bids (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, subcontractor_id INTEGER NOT NULL REFERENCES subcontractors(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'draft', -- draft | submitted | withdrawn | late_refused | disqualified | qualified | awarded | unsuccessful
+  submitted_at TEXT, receipt_hash TEXT, revision INTEGER NOT NULL DEFAULT 0, total_amount REAL, discount_amount REAL NOT NULL DEFAULT 0, vat_amount REAL NOT NULL DEFAULT 0,
+  validity_days INTEGER, deviations TEXT, alternative_offer TEXT, bid_bond_ref TEXT, price_version INTEGER NOT NULL DEFAULT 1,
+  disqualified_step INTEGER, disqualify_reason TEXT, rank INTEGER, tech_score REAL, commercial_score REAL, final_score REAL,
+  bid_bond_received INTEGER NOT NULL DEFAULT 0, register_note TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT,
+  UNIQUE (rfx_id, subcontractor_id)
+);
+CREATE TABLE IF NOT EXISTS rfx_bid_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, bid_id INTEGER NOT NULL REFERENCES rfx_bids(id) ON DELETE CASCADE, revision INTEGER NOT NULL, submitted_at TEXT, receipt_hash TEXT, total_amount REAL, note TEXT
+);
+CREATE TABLE IF NOT EXISTS rfx_bid_responses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, bid_id INTEGER NOT NULL REFERENCES rfx_bids(id) ON DELETE CASCADE, requirement_id INTEGER NOT NULL REFERENCES rfx_requirements(id) ON DELETE CASCADE,
+  value_text TEXT, value_number REAL, attachment_id INTEGER REFERENCES attachments(id) ON DELETE SET NULL, compliant INTEGER, eval_comment TEXT, UNIQUE (bid_id, requirement_id)
+);
+CREATE TABLE IF NOT EXISTS rfx_bid_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, bid_id INTEGER NOT NULL REFERENCES rfx_bids(id) ON DELETE CASCADE, boq_line_id INTEGER NOT NULL REFERENCES rfx_boq_lines(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL DEFAULT 1, unit_rate REAL NOT NULL DEFAULT 0, amount REAL NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE (bid_id, boq_line_id, version)
+);
+CREATE TABLE IF NOT EXISTS rfx_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, bid_id INTEGER NOT NULL REFERENCES rfx_bids(id) ON DELETE CASCADE, step_id INTEGER NOT NULL REFERENCES rfx_steps(id) ON DELETE CASCADE,
+  criterion_id INTEGER REFERENCES rfx_criteria(id) ON DELETE CASCADE, evaluator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, score REAL, compliant INTEGER, comment TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rfx_scores ON rfx_scores(bid_id, step_id, COALESCE(criterion_id, 0), evaluator_id);
+CREATE TABLE IF NOT EXISTS rfx_signoffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  decision TEXT NOT NULL, comment TEXT, decided_at TEXT NOT NULL, UNIQUE (rfx_id, user_id)
+);
+-- evaluation clarification and BAFO requests sent to one bidder through the portal
+CREATE TABLE IF NOT EXISTS rfx_bid_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, rfx_id INTEGER NOT NULL REFERENCES rfx_tenders(id) ON DELETE CASCADE, bid_id INTEGER NOT NULL REFERENCES rfx_bids(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, -- clarification | bafo
+  message TEXT NOT NULL, due_at TEXT, requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL, requested_at TEXT NOT NULL,
+  response TEXT, responded_at TEXT, response_attachment_id INTEGER REFERENCES attachments(id) ON DELETE SET NULL, status TEXT NOT NULL DEFAULT 'open' -- open | answered | expired
+);
+CREATE INDEX IF NOT EXISTS idx_rfx_breq ON rfx_bid_requests(bid_id, status);

@@ -12,7 +12,10 @@ export interface ErpApInvoice {
     supplierCode: string; supplierName: string; supplierTrn: string | null; supplierTradeLicense: string | null;
     invoiceNo: string | null; supplierInvoiceRef: string | null; invoiceDate: string | null; dueDate: string | null; periodFrom: string | null; periodTo: string | null;
     currency: string; projectCode: string; costCentre: string; subcontractNo: string | null; narration: string | null; buyerTrn: string | null;
+    /** country operation (entity) that owns the document: its legal name, code and tax label */ entityCode: string; buyerName: string; taxLabel: string;
   };
+  /** reporting-currency (USD) equivalents with the rate locked at the invoice date */
+  reporting: { currency: string; rate: number | null; rateDate: string | null; gross: number | null; netPayable: number | null };
   lines: { lineNo: number; itemCode: string | null; description: string; unit: string | null; accountHint: string; projectCostCode: string; stageCostCode: string | null; quantity: number; rate: number; netAmount: number; vatCode: "SR5"; vatRate: number; vatAmount: number; certifiedQuantity: number; certifiedNetAmount: number }[];
   deductions: { retention: { percent: number; amount: number; account: string }; advanceRecovery: { percent: number; amount: number; account: string } };
   totals: { subtotal: number; vatAmount: number; gross: number; certifiedGross: number; retention: number; advanceRecovery: number; netPayable: number; paid: number; outstanding: number };
@@ -36,7 +39,9 @@ export function toErpPayload(d: InvoiceDetail, opts: { baseUrl?: string } = {}):
       supplierCode: d.subcontractor.code ?? `SUB-${d.subcontractor.id}`, supplierName: d.subcontractor.name, supplierTrn: d.subcontractor.tax_no, supplierTradeLicense: d.subcontractor.trade_license_no,
       invoiceNo: i.invoice_no, supplierInvoiceRef: i.sub_invoice_ref, invoiceDate: i.invoice_date, dueDate: i.due_date, periodFrom: i.period_from, periodTo: i.period_to,
       currency: i.currency, projectCode: d.project.code, costCentre: d.project.cost_centre, subcontractNo: d.assignment.code, narration: d.assignment.scope, buyerTrn: d.company.trn || null,
+      entityCode: d.entity.code, buyerName: d.company.name, taxLabel: d.company.tax_label,
     },
+    reporting: { currency: "USD", rate: i.fx_rate_usd ?? null, rateDate: i.fx_date ?? null, gross: i.claimed_amount_usd ?? null, netPayable: i.net_payable_usd ?? null },
     lines: d.lines.map((l) => ({
       lineNo: l.line_no, itemCode: l.item_code, description: l.description, unit: l.unit, accountHint: "Subcontract cost", projectCostCode: d.project.code, stageCostCode: stageCode(l.stage_id) ?? stageCode(d.assignment.stage_id),
       quantity: l.this_qty, rate: l.rate, netAmount: l.amount, vatCode: "SR5", vatRate: i.vat_rate, vatAmount: Math.round(l.amount * i.vat_rate) / 100, certifiedQuantity: certified ? l.certified_qty : 0, certifiedNetAmount: certified ? l.certified_amount : 0,

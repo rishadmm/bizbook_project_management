@@ -9,6 +9,8 @@ import { hashToken, newToken, nowIso, parseDbDate, requestMeta } from "./auth";
 import { burnPasswordCheck, verifyPassword } from "./password";
 import { isClientRole, parseScope, type ClientRole } from "./client-portal-core";
 import type { Attachment } from "./types";
+import { getEntityById, type Entity } from "./entities";
+import { setRequestCurrency } from "./request-context";
 
 export const CLIENT_COOKIE = "bbp_client";
 export const CLIENT_SESSION_HOURS = 12;
@@ -21,14 +23,14 @@ export class ClientPortalError extends Error { constructor(m: string) { super(m)
 
 export interface ClientRecord {
   id: number; name: string; type: string; contact_person: string | null; email: string | null; phone: string | null;
-  portal_slug: string | null; portal_enabled: number; portal_show_subcontractors: number; portal_show_financials: number;
+  portal_slug: string | null; portal_enabled: number; portal_show_subcontractors: number; portal_show_financials: number; entity_id: number;
 }
 export interface ClientSessionUser {
   id: number; name: string; email: string; role: ClientRole; phone: string | null; jobTitle: string | null; mustChange: boolean;
   scope: number[] | null; lastLoginAt: string | null; previousLoginAt: string | null;
 }
 export interface ClientSession {
-  sessionId: number; user: ClientSessionUser; client: ClientRecord; readOnly: boolean; impersonator: { id: number; name: string } | null;
+  sessionId: number; user: ClientSessionUser; client: ClientRecord; /** the client's country: tenant legal name, currency, map centre */ entity: Entity; readOnly: boolean; impersonator: { id: number; name: string } | null;
 }
 
 export type ClientEvent = "login_success" | "login_failed" | "locked" | "logout" | "password_changed" | "password_reset" | "user_created" | "user_disabled" | "user_enabled"
@@ -55,7 +57,7 @@ export const getClientSession = cache(async (): Promise<ClientSession | null> =>
   const db = getDb();
   const s = db.prepare("SELECT id, client_user_id, client_id, impersonated_by, expires_at, revoked_at, last_seen_at FROM client_sessions WHERE token_hash = ?").get(hashToken(token)) as SessRow | undefined;
   if (!s || s.revoked_at || parseDbDate(s.expires_at) <= Date.now()) return null;
-  const client = db.prepare("SELECT id, name, type, contact_person, email, phone, portal_slug, portal_enabled, portal_show_subcontractors, portal_show_financials FROM clients WHERE id = ?").get(s.client_id) as ClientRecord | undefined;
+  const client = db.prepare("SELECT id, name, type, contact_person, email, phone, portal_slug, portal_enabled, portal_show_subcontractors, portal_show_financials, entity_id FROM clients WHERE id = ?").get(s.client_id) as ClientRecord | undefined;
   if (!client || !clientPortalAvailable(client)) return null;
   let user: ClientSessionUser;
   let impersonator: ClientSession["impersonator"] = null;
@@ -71,7 +73,10 @@ export const getClientSession = cache(async (): Promise<ClientSession | null> =>
       lastLoginAt: u.last_login_at, previousLoginAt: u.previous_login_at };
   }
   if (!s.last_seen_at || Date.now() - parseDbDate(s.last_seen_at) > 60_000) db.prepare("UPDATE client_sessions SET last_seen_at = ? WHERE id = ?").run(nowIso(), s.id);
-  return { sessionId: s.id, user, client, readOnly: !!impersonator, impersonator };
+  const entity = getEntityById(client.entity_id);
+  if (!entity) return null;
+  setRequestCurrency(entity.currency);
+  return { sessionId: s.id, user, client, entity, readOnly: !!impersonator, impersonator };
 });
 
 /**

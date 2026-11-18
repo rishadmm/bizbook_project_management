@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useServerForm } from "@/components/useServerForm";
 import { Field, Input, Select, Textarea } from "@/components/ui";
-import { addDays, formatMoney } from "@/lib/format";
+import { addDays, currencyDecimals, formatMoney } from "@/lib/format";
 import { deductions, type BoqItem } from "@/features/invoices/calc";
 import { amountInWords } from "@/features/invoices/words";
 import { submitInvoice, type WorkState } from "../work-actions";
@@ -62,7 +62,7 @@ export default function SessionInvoiceForm({ assignments, defaultAssignment, tod
   const onTotals = useCallback((t: LineTotals) => setTotals(t), []);
 
   const cur = assignments.find((a) => a.id === asg);
-  const money = (n: number) => formatMoney(n, { currency, decimals: 2 });
+  const money = (n: number) => formatMoney(n, { currency, decimals: currencyDecimals(currency) });
   const badPeriod = !!from && !!to && to < from;
   useEffect(() => { (document.getElementById("period-to") as HTMLInputElement | null)?.setCustomValidity(badPeriod ? "Period to must be on or after period from" : ""); }, [badPeriod]);
   useEffect(() => { setTotals(ZERO); }, [asg]);

@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, type AuthUser } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { entityOfSubcontractor, entityOfAttachmentOwner } from "@/lib/entities";
 import { generateTempPassword, hashPassword } from "@/lib/password";
 import { passwordPolicyError } from "@/lib/permissions";
 import { ensureSlug, insertPortalUser, isPortalRole, isSlugTaken, slugError } from "@/lib/portal-core";
@@ -25,13 +27,15 @@ async function run(fn: () => Promise<CredResult>): Promise<CredResult> {
   }
 }
 
-function subOrThrow(subId: number) {
+function subOrThrow(subId: number, who: AuthUser) {
   const s = getDb().prepare("SELECT id, name, portal_slug, portal_enabled FROM subcontractors WHERE id = ?").get(subId) as { id: number; name: string; portal_slug: string | null; portal_enabled: number } | undefined;
   if (!s) throw new Error("Subcontractor not found");
+  assertUserEntity(who, entityOfSubcontractor(subId), "Subcontractor"); // country access
   return s;
 }
 /** The portal user must belong to the given subcontractor (never trust the user id alone). */
-function userOrThrow(subId: number, userId: number) {
+function userOrThrow(subId: number, userId: number, who: AuthUser) {
+  assertUserEntity(who, entityOfSubcontractor(subId), "Portal user");
   const u = getDb().prepare("SELECT * FROM portal_users WHERE id = ? AND subcontractor_id = ?").get(userId, subId) as
     { id: number; name: string; email: string; status: string; last_login_at: string | null; portal_role: string } | undefined;
   if (!u) throw new Error("Portal user not found");
@@ -50,7 +54,7 @@ export async function createPortalUser(_prev: CredResult, form: FormData): Promi
   return run(async () => {
     const me = await requirePermission("subcontractors", "portal");
     const subId = Number(form.get("subcontractor_id"));
-    subOrThrow(subId);
+    subOrThrow(subId, me);
     const name = str(form, "name"), email = str(form, "email").toLowerCase(), role = str(form, "portal_role");
     if (!name) throw new Error("Name is required");
     if (!EMAIL.test(email)) throw new Error("Enter a valid e-mail address");
@@ -74,8 +78,8 @@ export async function resetPortalUserPassword(_prev: CredResult, form: FormData)
   return run(async () => {
     const me = await requirePermission("subcontractors", "portal");
     const subId = Number(form.get("subcontractor_id"));
-    const sub = subOrThrow(subId);
-    const u = userOrThrow(subId, Number(form.get("user_id")));
+    const sub = subOrThrow(subId, me);
+    const u = userOrThrow(subId, Number(form.get("user_id")), me);
     const password = generateTempPassword();
     getDb().prepare("UPDATE portal_users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, locked_until = NULL, password_changed_at = NULL WHERE id = ?").run(hashPassword(password), u.id);
     revokePortalSessions(u.id);
@@ -90,7 +94,7 @@ export async function updatePortalUser(form: FormData): Promise<ActionResult> {
   return guard(async () => {
     const me = await requirePermission("subcontractors", "portal");
     const subId = Number(form.get("subcontractor_id"));
-    const u = userOrThrow(subId, Number(form.get("user_id")));
+    const u = userOrThrow(subId, Number(form.get("user_id")), me);
     const name = str(form, "name"), role = str(form, "portal_role");
     if (!name) throw new Error("Name is required");
     if (!isPortalRole(role)) throw new Error("Choose a portal role");
@@ -105,7 +109,7 @@ export async function updatePortalUser(form: FormData): Promise<ActionResult> {
 export async function setPortalUserStatus(form: FormData): Promise<void> {
   const me = await requirePermission("subcontractors", "portal");
   const subId = Number(form.get("subcontractor_id"));
-  const u = userOrThrow(subId, Number(form.get("user_id")));
+  const u = userOrThrow(subId, Number(form.get("user_id")), me);
   const enable = str(form, "enable") === "1";
   getDb().prepare("UPDATE portal_users SET status = ? WHERE id = ?").run(enable ? "active" : "disabled", u.id);
   if (!enable) revokePortalSessions(u.id);
@@ -117,7 +121,7 @@ export async function setPortalUserStatus(form: FormData): Promise<void> {
 export async function unlockPortalUser(form: FormData): Promise<void> {
   const me = await requirePermission("subcontractors", "portal");
   const subId = Number(form.get("subcontractor_id"));
-  const u = userOrThrow(subId, Number(form.get("user_id")));
+  const u = userOrThrow(subId, Number(form.get("user_id")), me);
   getDb().prepare("UPDATE portal_users SET failed_attempts = 0, locked_until = NULL WHERE id = ?").run(u.id);
   await logPortalEvent("user_unlocked", { subId, userId: u.id, email: u.email, detail: `Unlocked by ${me.name}` });
   refresh(subId);
@@ -126,7 +130,7 @@ export async function unlockPortalUser(form: FormData): Promise<void> {
 export async function signOutPortalUser(form: FormData): Promise<void> {
   const me = await requirePermission("subcontractors", "portal");
   const subId = Number(form.get("subcontractor_id"));
-  const u = userOrThrow(subId, Number(form.get("user_id")));
+  const u = userOrThrow(subId, Number(form.get("user_id")), me);
   const n = revokePortalSessions(u.id);
   await logPortalEvent("session_revoked", { subId, userId: u.id, email: u.email, detail: `${n} session(s) signed out by ${me.name}` });
   refresh(subId);
@@ -135,7 +139,7 @@ export async function signOutPortalUser(form: FormData): Promise<void> {
 export async function deletePortalUser(form: FormData): Promise<void> {
   const me = await requirePermission("subcontractors", "portal");
   const subId = Number(form.get("subcontractor_id"));
-  const u = userOrThrow(subId, Number(form.get("user_id")));
+  const u = userOrThrow(subId, Number(form.get("user_id")), me);
   if (u.last_login_at) throw new Error("This user has already signed in: disable the account instead of deleting it.");
   getDb().prepare("DELETE FROM portal_users WHERE id = ?").run(u.id);
   await logPortalEvent("user_deleted", { subId, email: u.email, detail: `Deleted by ${me.name}` });
@@ -148,7 +152,7 @@ export async function savePortalSettings(form: FormData): Promise<ActionResult> 
   return guard(async () => {
     const me = await requirePermission("subcontractors", "portal");
     const subId = Number(form.get("subcontractor_id"));
-    const sub = subOrThrow(subId);
+    const sub = subOrThrow(subId, me);
     const db = getDb();
     const slugRaw = str(form, "slug").toLowerCase();
     if (slugRaw && slugRaw !== sub.portal_slug) {
@@ -176,6 +180,7 @@ export async function decideChangeRequest(form: FormData): Promise<void> {
   await requirePermission("subcontractors", "edit");
   const subId = Number(form.get("subcontractor_id"));
   const id = Number(form.get("id"));
+  assertUserEntity(me, entityOfSubcontractor(subId), "Change request");
   const approve = str(form, "decision") === "approve";
   const db = getDb();
   const r = db.prepare("SELECT * FROM portal_change_requests WHERE id = ? AND subcontractor_id = ? AND status = 'pending'").get(id, subId) as { id: number; kind: string; payload: string } | undefined;
@@ -196,9 +201,10 @@ export async function decideChangeRequest(form: FormData): Promise<void> {
 
 /** Rejects a document uploaded through the portal (the subcontractor sees the note). */
 export async function rejectPortalDocument(form: FormData): Promise<void> {
-  await requirePermission("subcontractors", "edit");
+  const editor = await requirePermission("subcontractors", "edit");
   const subId = Number(form.get("subcontractor_id"));
   const id = Number(form.get("id"));
+  assertUserEntity(editor, entityOfSubcontractor(subId), "Document");
   const r = getDb().prepare("UPDATE subcontractor_documents SET status = 'rejected', review_note = ? WHERE id = ? AND subcontractor_id = ?").run(opt(form, "note") ?? "Rejected", id, subId);
   if (!r.changes) throw new Error("Document not found");
   await logActivity("subcontractor", subId, "document", "Portal document rejected");
@@ -216,6 +222,7 @@ export async function replyToIssue(form: FormData): Promise<ActionResult> {
     const db = getDb();
     const i = db.prepare("SELECT id, project_id, title, assignment_id FROM issues WHERE id = ?").get(id) as { id: number; project_id: number; title: string; assignment_id: number | null } | undefined;
     if (!i) throw new Error("Issue not found");
+    assertUserEntity(me, entityOfAttachmentOwner("project", i.project_id), "Issue");
     const now = new Date().toISOString();
     db.prepare("INSERT INTO issue_comments(issue_id, author_type, author_id, author_name, body, created_at) VALUES (?,?,?,?,?,?)").run(i.id, "internal", me.id || null, me.name, body, now);
     // awaiting the subcontractor only when asked and when the issue sits on a subcontract

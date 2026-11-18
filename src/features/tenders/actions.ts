@@ -11,7 +11,9 @@ import type { BudgetCategory, BudgetLine, Tender, TenderRevision, TenderStatus }
 import { canMove, TERMINAL } from "./workflow";
 import { nextCode } from "./conversion";
 import { hasOpenRequest, submitForApproval, withdrawOpenRequest } from "@/lib/approvals/engine";
-import { isAdminUser, requirePermission } from "@/lib/auth";
+import { isAdminUser, requirePermission, type AuthUser } from "@/lib/auth";
+import { assertUserEntity } from "@/lib/entity-context";
+import { getActiveEntity } from "@/lib/auth";
 import { guard, type ActionResult as FormResult } from "@/lib/action-result";
 
 const str = (f: FormData, k: string): string => String(f.get(k) ?? "").trim();
@@ -21,9 +23,10 @@ const intOrNull = (f: FormData, k: string): number | null => { const n = numOrNu
 const isCategory = (c: string): c is BudgetCategory => c in ENUMS.budgetCategory;
 const path = (id: number) => `/tenders/${id}`;
 
-function tenderOr404(id: number): Tender {
+function tenderOr404(id: number, user: AuthUser): Tender {
   const t = getDb().prepare("SELECT * FROM tenders WHERE id = ?").get(id) as Tender | undefined;
   if (!t) throw new Error("Tender not found");
+  assertUserEntity(user, t.entity_id, "Tender"); // country access: a tender of another country does not exist for this user
   return t;
 }
 function currentRevision(t: Tender): TenderRevision {
@@ -49,16 +52,19 @@ function tenderFields(f: FormData) {
 
 export async function createTender(form: FormData): Promise<FormResult> {
   return guard(async () => {
-    await requirePermission("tenders", "create");
+    const me = await requirePermission("tenders", "create");
     const v = tenderFields(form);
     const user = await getCurrentUser();
+    const entity = await getActiveEntity();
+    if (v.client_id) { const c = getDb().prepare("SELECT entity_id FROM clients WHERE id = ?").get(v.client_id) as { entity_id: number } | undefined; if (!c || c.entity_id !== entity.id) throw new Error("The client belongs to another country"); }
+    void me;
     const db = getDb();
     const id = db.transaction(() => {
-      const code = nextCode("tenders", "TND");
+      const code = nextCode("tenders", "TND", entity.id);
       const info = db.prepare(`INSERT INTO tenders(code, title, client_id, kind, category, location, scope_summary, technical_spec, quantity, quantity_unit,
-        issue_date, clarification_deadline, submission_deadline, bid_bond_amount, estimated_value, status, owner_id, probability_pct)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)`).run(code, v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec,
-        v.quantity, v.quantity_unit, v.issue_date, v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id ?? (user.id || null), v.probability_pct);
+        issue_date, clarification_deadline, submission_deadline, bid_bond_amount, estimated_value, status, owner_id, probability_pct, entity_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)`).run(code, v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec,
+        v.quantity, v.quantity_unit, v.issue_date, v.clarification_deadline, v.submission_deadline, v.bid_bond_amount, v.estimated_value, v.owner_id ?? (user.id || null), v.probability_pct, entity.id);
       const tid = Number(info.lastInsertRowid);
       const rev = db.prepare("INSERT INTO tender_revisions(tender_id, rev_no, label, reason, status, created_by) VALUES (?,0,'R0','Initial estimate','draft',?)").run(tid, user.id || null);
       db.prepare("UPDATE tenders SET current_revision_id = ? WHERE id = ?").run(Number(rev.lastInsertRowid), tid);
@@ -76,10 +82,11 @@ export async function createTender(form: FormData): Promise<FormResult> {
 
 export async function updateTender(form: FormData): Promise<FormResult> {
   return guard(async () => {
-    await requirePermission("tenders", "edit");
+    const me = await requirePermission("tenders", "edit");
     const id = Number(form.get("id"));
-    tenderOr404(id);
+    const cur = tenderOr404(id, me);
     const v = tenderFields(form);
+    if (v.client_id) { const c = getDb().prepare("SELECT entity_id FROM clients WHERE id = ?").get(v.client_id) as { entity_id: number } | undefined; if (!c || c.entity_id !== cur.entity_id) throw new Error("The client belongs to another country"); }
     getDb().prepare(`UPDATE tenders SET title=?, client_id=?, kind=?, category=?, location=?, scope_summary=?, technical_spec=?, quantity=?, quantity_unit=?,
       issue_date=?, clarification_deadline=?, submission_deadline=?, bid_bond_amount=?, estimated_value=?, owner_id=?, probability_pct=? WHERE id=?`)
       .run(v.title, v.client_id, v.kind, v.category, v.location, v.scope_summary, v.technical_spec, v.quantity, v.quantity_unit, v.issue_date,
@@ -90,9 +97,9 @@ export async function updateTender(form: FormData): Promise<FormResult> {
 }
 
 export async function deleteTender(form: FormData): Promise<void> {
-  await requirePermission("tenders", "delete");
+  const me = await requirePermission("tenders", "delete");
   const id = Number(form.get("id"));
-  const t = tenderOr404(id);
+  const t = tenderOr404(id, me);
   if (t.project_id) throw new Error("Cannot delete a tender that has a project");
   if (t.status !== "draft") throw new Error("Only draft tenders can be deleted - cancel it instead");
   getDb().transaction(() => {
@@ -110,8 +117,8 @@ export async function transitionTender(form: FormData): Promise<void> {
   const id = Number(form.get("id"));
   const to = str(form, "to") as TenderStatus;
   const override = str(form, "override") === "on";
-  await requirePermission("tenders", to === "submitted" || to === "under_review" ? "submit" : "edit");
-  const t = tenderOr404(id);
+  const me = await requirePermission("tenders", to === "submitted" || to === "under_review" ? "submit" : "edit");
+  const t = tenderOr404(id, me);
   if (to === "won" || to === "lost") throw new Error("Use the Mark Won / Mark Lost dialogs");
   if (to === "approved") throw new Error("Tender approval is decided by the approval workflow");
   if (!canMove(t.status, to)) throw new Error(`Cannot move from ${t.status} to ${to}`);
@@ -140,7 +147,7 @@ export async function transitionTender(form: FormData): Promise<void> {
 export async function markWon(form: FormData): Promise<void> {
   const user = await requirePermission("tenders", "approve");
   const id = Number(form.get("id"));
-  const t = tenderOr404(id);
+  const t = tenderOr404(id, user);
   if (!canMove(t.status, "won")) throw new Error("Only submitted or negotiation tenders can be marked won");
   if (t.project_id) throw new Error("This tender already has a project");
   const wonValue = numOrNull(form, "won_value");
@@ -153,16 +160,16 @@ export async function markWon(form: FormData): Promise<void> {
   const res = submitForApproval("tender_award", id, { userId: user.id, payload: { won_value: wonValue, award_date: awardDate, start_date: start, end_date: end, manager_id: managerId } });
   revalidatePath(path(id)); revalidatePath("/tenders"); revalidatePath("/projects"); revalidatePath("/"); revalidatePath("/", "layout");
   if (res.status === "auto_approved") {
-    const projectId = tenderOr404(id).project_id;
+    const projectId = tenderOr404(id, user).project_id;
     if (projectId) redirect(`/projects/${projectId}`);
   }
   redirect(`${path(id)}?tab=approvals`);
 }
 
 export async function markLost(form: FormData): Promise<void> {
-  await requirePermission("tenders", "approve");
+  const me = await requirePermission("tenders", "approve");
   const id = Number(form.get("id"));
-  const t = tenderOr404(id);
+  const t = tenderOr404(id, me);
   if (!canMove(t.status, "lost")) throw new Error("Only submitted or negotiation tenders can be marked lost");
   if (hasOpenRequest("tender_award", id)) throw new Error("An award approval is pending for this tender; cancel it first");
   const reason = str(form, "primary_reason") || "other";
@@ -188,11 +195,12 @@ export async function markLost(form: FormData): Promise<void> {
 /* ------------------------------------------------------------------ sections */
 
 export async function saveSection(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const id = Number(form.get("id"));
   const db = getDb();
   const s = db.prepare("SELECT * FROM tender_sections WHERE id = ?").get(id) as { id: number; tender_id: number; status: string; completed_at: string | null } | undefined;
   if (!s) throw new Error("Section not found");
+  tenderOr404(s.tender_id, me);
   const status = str(form, "status");
   if (!(status in ENUMS.sectionStatus)) throw new Error("Invalid status");
   const completed = status === "completed" ? s.completed_at ?? todayISO() : null;
@@ -203,10 +211,10 @@ export async function saveSection(form: FormData): Promise<void> {
 }
 
 export async function addSection(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const tid = Number(form.get("tender_id")); const title = str(form, "title");
   if (!title) throw new Error("Title is required");
-  tenderOr404(tid);
+  tenderOr404(tid, me);
   getDb().prepare("INSERT INTO tender_sections(tender_id, department_id, title, status, assignee_id, due_date) VALUES (?,?,?, 'not_started', ?, ?)")
     .run(tid, intOrNull(form, "department_id"), title, intOrNull(form, "assignee_id"), strOrNull(form, "due_date"));
   await logActivity("tender", tid, "section", `Section added: ${title}`);
@@ -214,10 +222,11 @@ export async function addSection(form: FormData): Promise<void> {
 }
 
 export async function deleteSection(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const id = Number(form.get("id"));
   const s = getDb().prepare("SELECT tender_id, title FROM tender_sections WHERE id = ?").get(id) as { tender_id: number; title: string } | undefined;
   if (!s) return;
+  tenderOr404(s.tender_id, me);
   getDb().prepare("DELETE FROM tender_sections WHERE id = ?").run(id);
   await logActivity("tender", s.tender_id, "section", `Section removed: ${s.title}`);
   revalidatePath(path(s.tender_id));
@@ -234,11 +243,11 @@ export interface ImportRow {
   category: string; item_code?: string; description: string; unit?: string; quantity: number; unit_cost: number; margin_pct: number; wbs_stage?: string; notes?: string;
 }
 
-function editableRevision(revisionId: number): { rev: TenderRevision; tender: Tender } {
+function editableRevision(revisionId: number, user: AuthUser): { rev: TenderRevision; tender: Tender } {
   const rev = getDb().prepare("SELECT * FROM tender_revisions WHERE id = ?").get(revisionId) as TenderRevision | undefined;
   if (!rev) throw new Error("Revision not found");
   if (rev.status !== "draft") throw new Error(`Revision ${rev.label ?? rev.rev_no} is ${rev.status} and read-only`);
-  const tender = tenderOr404(rev.tender_id);
+  const tender = tenderOr404(rev.tender_id, user);
   if (TERMINAL.includes(tender.status)) throw new Error("Tender is closed");
   if (hasOpenRequest("tender_revision", rev.id) || (tender.status === "under_review" && hasOpenRequest("tender_submission", tender.id))) throw new Error("The budget is locked while an approval is pending");
   return { rev, tender };
@@ -251,12 +260,12 @@ const finite = (n: unknown, name: string): number => { if (typeof n !== "number"
 
 export async function updateBudgetLine(lineId: number, patch: LinePatch, reason?: string): Promise<ActionResult> {
   try {
-    await requirePermission("tender_budget", "edit");
+    const me = await requirePermission("tender_budget", "edit");
     const db = getDb();
     const line = db.prepare("SELECT * FROM budget_lines WHERE id = ?").get(lineId) as BudgetLine | undefined;
     if (!line) throw new Error("Line not found");
     if (patch.margin_pct !== undefined && patch.margin_pct !== line.margin_pct) await requirePermission("tender_budget", "edit_margin");
-    editableRevision(line.revision_id);
+    editableRevision(line.revision_id, me);
     const user = await getCurrentUser();
     const next = { ...line, ...patch };
     if (patch.description !== undefined && !patch.description.trim()) throw new Error("Description is required");
@@ -281,9 +290,9 @@ export async function updateBudgetLine(lineId: number, patch: LinePatch, reason?
 
 export async function addBudgetLine(revisionId: number, category: string): Promise<ActionResult<BudgetLine>> {
   try {
-    await requirePermission("tender_budget", "edit");
+    const me = await requirePermission("tender_budget", "edit");
     if (!isCategory(category)) throw new Error("Invalid category");
-    const { rev } = editableRevision(revisionId);
+    const { rev } = editableRevision(revisionId, me);
     const db = getDb();
     const last = db.prepare("SELECT MAX(sort) m FROM budget_lines WHERE revision_id = ?").get(revisionId) as { m: number | null };
     const sib = db.prepare("SELECT margin_pct, wbs_stage FROM budget_lines WHERE revision_id = ? AND category = ? ORDER BY id DESC LIMIT 1").get(revisionId, category) as { margin_pct: number; wbs_stage: string | null } | undefined;
@@ -296,11 +305,11 @@ export async function addBudgetLine(revisionId: number, category: string): Promi
 
 export async function deleteBudgetLine(lineId: number): Promise<ActionResult> {
   try {
-    await requirePermission("tender_budget", "edit");
+    const me = await requirePermission("tender_budget", "edit");
     const db = getDb();
     const line = db.prepare("SELECT * FROM budget_lines WHERE id = ?").get(lineId) as BudgetLine | undefined;
     if (!line) return { ok: true };
-    editableRevision(line.revision_id);
+    editableRevision(line.revision_id, me);
     db.prepare("DELETE FROM budget_lines WHERE id = ?").run(lineId);
     refreshRevisionTotals(line.revision_id);
     return { ok: true };
@@ -310,8 +319,8 @@ export async function deleteBudgetLine(lineId: number): Promise<ActionResult> {
 /** Set markup % on all lines (scope "all") or one category; every changed line is logged in margin_changes. */
 export async function bulkSetMargin(revisionId: number, scope: string, margin: number, reason: string): Promise<ActionResult<{ changed: number }>> {
   try {
-    await requirePermission("tender_budget", "edit_margin");
-    const { rev } = editableRevision(revisionId);
+    const me = await requirePermission("tender_budget", "edit_margin");
+    const { rev } = editableRevision(revisionId, me);
     finite(margin, "Margin");
     if (margin < -100 || margin > 1000) throw new Error("Margin out of range");
     if (!reason.trim()) throw new Error("A reason is required");
@@ -339,8 +348,8 @@ export async function bulkSetMargin(revisionId: number, scope: string, margin: n
 
 export async function importBudgetLines(revisionId: number, rows: ImportRow[], replace: boolean): Promise<ActionResult<{ imported: number }>> {
   try {
-    await requirePermission("tender_budget", "edit");
-    const { rev } = editableRevision(revisionId);
+    const me = await requirePermission("tender_budget", "edit");
+    const { rev } = editableRevision(revisionId, me);
     if (!rows.length) throw new Error("No rows to import");
     rows.forEach((r, i) => {
       if (!isCategory(r.category)) throw new Error(`Row ${i + 1}: invalid category "${r.category}"`);
@@ -365,10 +374,10 @@ export async function importBudgetLines(revisionId: number, rows: ImportRow[], r
 /* ------------------------------------------------------------------ revisions & negotiation */
 
 export async function createRevision(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const tid = Number(form.get("tender_id")); const reason = str(form, "reason");
   if (!reason) throw new Error("A reason is required for a new revision");
-  const t = tenderOr404(tid);
+  const t = tenderOr404(tid, me);
   if (!["submitted", "negotiation"].includes(t.status)) throw new Error("New revisions are created after submission");
   const cur = currentRevision(t);
   if (cur.status === "draft") throw new Error("The current revision is still a draft - submit it first");
@@ -391,7 +400,7 @@ export async function createRevision(form: FormData): Promise<void> {
 export async function submitRevision(form: FormData): Promise<void> {
   const user = await requirePermission("tenders", "submit");
   const tid = Number(form.get("tender_id"));
-  const t = tenderOr404(tid);
+  const t = tenderOr404(tid, user);
   const cur = currentRevision(t);
   if (cur.status !== "draft" || cur.rev_no === 0) throw new Error("Only a draft revision R1+ can be submitted here");
   // Price revisions are released to the client through the tender_revision approval workflow.
@@ -400,18 +409,19 @@ export async function submitRevision(form: FormData): Promise<void> {
 }
 
 export async function saveRevisionFeedback(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const rid = Number(form.get("revision_id"));
   const rev = getDb().prepare("SELECT tender_id FROM tender_revisions WHERE id = ?").get(rid) as { tender_id: number } | undefined;
   if (!rev) throw new Error("Revision not found");
+  tenderOr404(rev.tender_id, me);
   getDb().prepare("UPDATE tender_revisions SET client_feedback = ? WHERE id = ?").run(strOrNull(form, "client_feedback"), rid);
   revalidatePath(path(rev.tender_id));
 }
 
 export async function saveNegotiation(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const id = Number(form.get("id")) || 0; const tid = Number(form.get("tender_id"));
-  const t = tenderOr404(tid);
+  const t = tenderOr404(tid, me);
   const channel = str(form, "channel") || "meeting";
   if (!(channel in ENUMS.negotiationChannel)) throw new Error("Invalid channel");
   const vals = [intOrNull(form, "revision_id") ?? t.current_revision_id, str(form, "date") || todayISO(), channel, strOrNull(form, "summary"), strOrNull(form, "client_position"),
@@ -424,8 +434,9 @@ export async function saveNegotiation(form: FormData): Promise<void> {
 }
 
 export async function deleteNegotiation(form: FormData): Promise<void> {
-  await requirePermission("tenders", "edit");
+  const me = await requirePermission("tenders", "edit");
   const id = Number(form.get("id")); const tid = Number(form.get("tender_id"));
+  tenderOr404(tid, me);
   getDb().prepare("DELETE FROM negotiations WHERE id = ? AND tender_id = ?").run(id, tid);
   await logActivity("tender", tid, "negotiation", "Negotiation entry deleted");
   revalidatePath(path(tid));

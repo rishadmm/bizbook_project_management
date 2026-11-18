@@ -1,8 +1,9 @@
 // Subcontractor portal roles, permission matrix and slug rules. PURE (no node imports): safe in client components.
-export type PortalRole = "owner" | "manager" | "site" | "accounts" | "viewer";
+export type PortalRole = "owner" | "manager" | "tendering" | "site" | "accounts" | "viewer";
 export const PORTAL_ROLES: { value: PortalRole; label: string; hint: string }[] = [
   { value: "owner", label: "Owner", hint: "Everything, including managing the company's portal users" },
   { value: "manager", label: "Manager", hint: "Everything except user management" },
+  { value: "tendering", label: "Tendering", hint: "Views and submits bids on supplier tenders; projects and documents read-only" },
   { value: "site", label: "Site engineer", hint: "Projects, progress updates, issues; documents read-only" },
   { value: "accounts", label: "Accounts", hint: "Invoices, statements, certificates and company documents" },
   { value: "viewer", label: "Viewer", hint: "Read-only access" },
@@ -11,18 +12,22 @@ export const portalRoleLabel = (r: string) => PORTAL_ROLES.find((x) => x.value =
 
 export type PortalPerm =
   | "dashboard" | "projects" | "progress" | "progress_submit" | "invoices" | "invoices_submit" | "certificates" | "certificates_request" | "payments"
-  | "issues" | "issues_raise" | "documents" | "documents_upload" | "request_change" | "team";
+  | "issues" | "issues_raise" | "documents" | "documents_upload" | "request_change" | "team" | "registration" | "tenders" | "tenders_bid";
 
 const ALL: PortalPerm[] = ["dashboard", "projects", "progress", "progress_submit", "invoices", "invoices_submit", "certificates", "certificates_request", "payments",
-  "issues", "issues_raise", "documents", "documents_upload", "request_change", "team"];
+  "issues", "issues_raise", "documents", "documents_upload", "request_change", "team", "registration", "tenders", "tenders_bid"];
 /** Simple role matrix (PORTAL_SPEC section 1). */
 export const PORTAL_ROLE_PERMS: Record<PortalRole, PortalPerm[]> = {
   owner: ALL,
   manager: ALL.filter((p) => p !== "team"),
-  site: ["dashboard", "projects", "progress", "progress_submit", "issues", "issues_raise", "documents"],
+  tendering: ["dashboard", "projects", "tenders", "tenders_bid", "documents"],
+  site: ["dashboard", "projects", "progress", "progress_submit", "issues", "issues_raise", "documents", "tenders"],
   accounts: ["dashboard", "projects", "invoices", "invoices_submit", "payments", "certificates", "documents", "documents_upload", "request_change"],
-  viewer: ["dashboard", "projects", "progress", "invoices", "certificates", "payments", "issues", "documents"],
+  viewer: ["dashboard", "projects", "progress", "invoices", "certificates", "payments", "issues", "documents", "tenders"],
 };
+/** Pages and actions a supplier may use while its registration is not approved (SUPPLIER_TENDERING_SPEC A4). Everything else is refused on the server. */
+export const RESTRICTED_PORTAL_PERMS: PortalPerm[] = ["dashboard", "registration", "documents"];
+export const isRestrictedAllowed = (perm: PortalPerm | null | undefined): boolean => !perm || RESTRICTED_PORTAL_PERMS.includes(perm);
 export const isPortalRole = (r: string): r is PortalRole => r in PORTAL_ROLE_PERMS;
 export const portalCan = (role: string, perm: PortalPerm): boolean => isPortalRole(role) && PORTAL_ROLE_PERMS[role].includes(perm);
 

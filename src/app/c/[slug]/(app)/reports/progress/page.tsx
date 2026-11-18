@@ -19,7 +19,7 @@ export default async function ProgressReportPage({ params, searchParams }: { par
   const r = progressReport(s, sp.project, sp.date);
   const qs = new URLSearchParams({ report: "progress", ...(sp.project ? { project: sp.project } : {}), ...(sp.date ? { date: sp.date } : {}) });
   return (
-    <ReportFrame slug={slug} title="Project progress report" subtitle={`as of ${formatDate(r.asOf)}`} clientName={s.client.name} csvHref={`/c/${slug}/reports/export?${qs}`}
+    <ReportFrame slug={slug} title="Project progress report" subtitle={`as of ${formatDate(r.asOf)}`} clientName={s.client.name} tenant={s.entity.legal_name} csvHref={`/c/${slug}/reports/export?${qs}`}
       controls={<><SelectParam name="project" label="Project" value={sp.project ?? ""} options={v.projects.map((p) => ({ value: String(p.id), label: `${p.code} · ${p.name}` }))} all="All projects" /><DateParam name="date" label="As of" value={sp.date ?? ""} max={r.today} /></>}>
       {r.items.length === 0 && <EmptyState title="No projects to report" />}
       {r.items.map(({ project: p, stages, curve, photos }) => (

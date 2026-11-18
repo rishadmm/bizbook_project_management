@@ -14,7 +14,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!can(session.user, "invoices", "view")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const id = Number((await ctx.params).id);
   const detail = Number.isInteger(id) ? getInvoiceDetail(id) : null;
-  if (!detail) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!detail || !session.user.entityIds.includes(detail.entity.id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const generatedAt = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
   const buf = await renderToBuffer(<InvoicePdf d={detail} generatedAt={generatedAt} />);
   const name = (detail.invoice.invoice_no ?? `invoice-${id}`).replace(/[^\w.\-]+/g, "_");

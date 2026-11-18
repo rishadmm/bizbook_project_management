@@ -9,16 +9,15 @@ import { nanoid } from "nanoid";
 import type { DB } from "./db";
 import { addDays } from "./format";
 import { deductions, fromSubtotal, r2, r3 } from "../features/invoices/calc";
+import { getRegionProfile } from "./seed-regions";
+import { currencyDecimals } from "./format";
 
 type Item = [desc: string, unit: string, price: number, share: number];
-const CATALOG: Record<string, Item[]> = {
-  cable: [["Trenching & ducting 2×110mm HDPE", "km", 185000, 0.34], ["Handhole installation", "nr", 2650, 0.14], ["Cable pulling & blowing", "m", 32, 0.16], ["Reinstatement — asphalt and kerbs", "m²", 145, 0.17], ["Joint chambers & splicing pits", "nr", 4300, 0.11], ["Testing, labelling & as-built records", "lot", 18500, 0.08]],
-  telecom: [["Micro-duct bank installation 4×40mm", "km", 210000, 0.32], ["Fibre blowing 144-core", "m", 28, 0.2], ["Manhole / handhole chambers", "nr", 3900, 0.16], ["Splicing & termination at ODF", "nr", 780, 0.14], ["Reinstatement — paving and landscaping", "m²", 130, 0.1], ["OTDR testing & documentation", "lot", 22000, 0.08]],
-  road: [["Excavation and sub-grade preparation", "m³", 38, 0.2], ["Granular sub-base, compacted", "m³", 112, 0.22], ["Asphalt base course 80mm", "m²", 72, 0.22], ["Asphalt wearing course 50mm", "m²", 58, 0.16], ["Kerbs and drainage inlets", "m", 165, 0.12], ["Road marking and signage", "m", 14, 0.08]],
-  pipeline: [["Trench excavation and bedding", "m", 210, 0.22], ["Pipe laying DN300 DI", "m", 640, 0.32], ["Butt-fusion / welded joints", "nr", 1850, 0.14], ["Valve chambers", "nr", 18500, 0.12], ["Backfill and compaction", "m³", 46, 0.12], ["Hydrostatic testing and commissioning", "lot", 38000, 0.08]],
-  civil: [["Earthworks and excavation", "m³", 42, 0.2], ["Reinforced concrete C40", "m³", 780, 0.28], ["Reinforcement steel Grade 60", "ton", 3450, 0.2], ["Formwork", "m²", 95, 0.14], ["Blockwork and plastering", "m²", 118, 0.1], ["Waterproofing and finishes", "m²", 86, 0.08]],
-  other: [["Mobilization and site setup", "lot", 24000, 0.1], ["Main works", "lot", 90000, 0.5], ["Supporting works", "lot", 40000, 0.25], ["Testing and handover", "lot", 18000, 0.15]],
-};
+// region of the current seeding pass (the module is shared by every region: refreshed at the start of each exported function)
+let PROFILE = getRegionProfile();
+let CATALOG: Record<string, Item[]> = PROFILE.invoices.catalog;
+let VAT = PROFILE.tenant.vatRate, CUR = PROFILE.tenant.currency, TAXL = PROFILE.tenant.taxLabel;
+function loadRegion() { PROFILE = getRegionProfile(); CATALOG = PROFILE.invoices.catalog; VAT = PROFILE.tenant.vatRate; CUR = PROFILE.tenant.currency; TAXL = PROFILE.tenant.taxLabel; }
 const SECTIONS = ["CH 0+000 – 0+500", "CH 0+500 – 1+100", "CH 1+100 – 1+800", "CH 1+800 – 2+400", "CH 2+400 – 3+000", "CH 3+000 – 3+600", "CH 3+600 – 4+200"];
 const CUT_REMARKS = ["Reduced to the measured quantity (joint survey).", "Quantity above the signed measurement sheet; balance carried to next invoice.", "Reinstatement not accepted by the authority; pay on re-inspection.", "Depth below specification at part of the section; 20% held.", "Duplicate of the quantity certified in the previous invoice."];
 
@@ -55,16 +54,18 @@ function fin(items: BoqLine[], a: AsgRow, lump = false): BoqLine[] {
 }
 
 /** Sync part: fills sub_invoice_lines and the invoice document fields for every seeded invoice. Returns the ids of the long and of a showcase invoice on project 2. */
-export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: number; finance: number; finance2: number }; syncCost: (invoiceId: number) => void }): { longId: number | null; showcaseId: number | null } {
+export function seedInvoiceDetails(db: DB, o: { today: string; entityId: number; users: { clerk: number; finance: number; finance2: number }; syncCost: (invoiceId: number) => void }): { longId: number | null; showcaseId: number | null } {
+  loadRegion();
+  const baseProject = (db.prepare("SELECT MIN(id) m FROM projects WHERE entity_id = ?").get(o.entityId) as { m: number }).m; // the region's 2nd project (P2, cable) carries the showcase invoices
   const asgs = db.prepare(`SELECT a.id, a.code, a.project_id, a.contract_value cv, a.scope, a.quantity qty, a.stage_id, a.retention_pct ret, a.advance_pct adv, a.payment_days days, p.category,
       p.manager_id pm, s.name sub_name, s.contact_person contact, s.email, s.id sub_id FROM assignments a JOIN projects p ON p.id = a.project_id JOIN subcontractors s ON s.id = a.subcontractor_id
-      WHERE EXISTS (SELECT 1 FROM sub_invoices i WHERE i.assignment_id = a.id) ORDER BY a.id`).all() as AsgRow[];
+      WHERE p.entity_id = ? AND EXISTS (SELECT 1 FROM sub_invoices i WHERE i.assignment_id = a.id) ORDER BY a.id`).all(o.entityId) as AsgRow[];
   const counts = new Map<number, number>();
   for (const a of asgs) counts.set(a.id, (db.prepare("SELECT COUNT(*) c FROM sub_invoices WHERE assignment_id = ?").get(a.id) as { c: number }).c);
-  const p2 = asgs.filter((a) => a.project_id === 2 && a.qty && a.category === "cable").sort((x, y) => (counts.get(y.id)! - counts.get(x.id)!) || x.id - y.id)[0];
+  const p2 = asgs.filter((a) => a.project_id === baseProject + 1 && a.qty && a.category === "cable").sort((x, y) => (counts.get(y.id)! - counts.get(x.id)!) || x.id - y.id)[0];
   const insLine = db.prepare(`INSERT INTO sub_invoice_lines(invoice_id, line_no, item_code, description, unit, contract_qty, rate, prev_qty, this_qty, cum_qty, amount, certified_qty, certified_amount, remarks, stage_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  const upd = db.prepare(`UPDATE sub_invoices SET claimed_amount=?, gross_amount=?, subtotal=?, vat_amount=?, currency='AED', vat_rate=5, retention_percent=?, advance_recovery_percent=?, previous_certified=?,
+  const upd = db.prepare(`UPDATE sub_invoices SET claimed_amount=?, gross_amount=?, subtotal=?, vat_amount=?, currency=?, vat_rate=?, retention_percent=?, advance_recovery_percent=?, previous_certified=?,
     certified_amount=?, retention_amount=?, advance_recovery=?, net_payable=?, paid_amount=?, sub_invoice_ref=?, submitted_by_name=?, submitted_by_email=?, submitted_at=?, due_date=?,
     reviewed_by=?, certified_by=?, certified_at=?, payment_ref=?, payment_method=? WHERE id=?`);
   const userName = (id: number) => (db.prepare("SELECT name n, email e FROM users WHERE id = ?").get(id) as { n: string; e: string });
@@ -79,7 +80,7 @@ export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: n
       const initials = a.sub_name.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w)).slice(0, 3).map((w) => w[0].toUpperCase()).join("");
       invs.forEach((inv, k) => {
         const K = invs.length;
-        const target = r2(inv.claimed_amount / 1.05);
+        const target = r2(inv.claimed_amount / (1 + VAT / 100));
         const active = long ? boq : boq.filter((_, i) => i < Math.ceil(boq.length * (0.5 + 0.5 * (K > 1 ? k / (K - 1) : 1))));
         const wsum = active.reduce((s, b) => s + b.share * (0.8 + 0.4 * frac(inv.id, b.share * 1000)), 0);
         const lines = active.map((b) => {
@@ -88,7 +89,7 @@ export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: n
           return { b, q, amount: r2(q * b.rate) };
         });
         const subtotal = r2(lines.reduce((s, l) => s + l.amount, 0));
-        const money = fromSubtotal(subtotal, 5);
+        const money = fromSubtotal(subtotal, VAT);
         const certState = ["certified", "approved", "paid"].includes(inv.status);
         // certification: spread the cut over the largest lines with remarks
         const f = inv.claimed_amount > 0 && certState ? Math.min(1, inv.certified_amount / inv.claimed_amount) : 0;
@@ -106,7 +107,7 @@ export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: n
           }
         }
         const certSub = r2(certLines.reduce((s, l) => s + l.amount, 0));
-        const certGross = certState ? (cut > 0.5 || f < 0.9999 ? fromSubtotal(certSub, 5).gross : money.gross) : 0;
+        const certGross = certState ? (cut > 0.5 || f < 0.9999 ? fromSubtotal(certSub, VAT).gross : money.gross) : 0;
         const ded = certState ? deductions(certGross, a.ret, a.adv) : { retention: 0, advance: 0, net: 0 };
         lines.forEach((l, i) => {
           const prev = cum.get(l.b.code) ?? 0;
@@ -122,16 +123,16 @@ export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: n
         const certAt = certState ? `${addDays(inv.invoice_date, 6) > o.today ? o.today : addDays(inv.invoice_date, 6)} 15:30:00` : null;
         const year = inv.invoice_date.slice(0, 4);
         const ref = `${initials || "SUB"}/${year}/${String(100 + ((a.id * 37 + k * 13) % 880)).padStart(4, "0")}`;
-        upd.run(money.gross, money.gross, money.subtotal, money.vat, a.ret || 0, a.adv || 0, r2(prevCert), certGross, ded.retention, ded.advance, ded.net, paid ? ded.net : 0, ref, sub.n, sub.e,
+        upd.run(money.gross, money.gross, money.subtotal, money.vat, CUR, VAT, a.ret || 0, a.adv || 0, r2(prevCert), certGross, ded.retention, ded.advance, ded.net, paid ? ded.net : 0, ref, sub.n, sub.e,
           inv.created_at.replace(" ", "T") + ".000Z", addDays(inv.invoice_date, a.days || 30), reviewed, certBy, certAt, paid ? `TRF-${year}-${String(400000 + inv.id * 17)}` : null, paid ? (inv.id % 7 === 0 ? "Cheque" : "Bank transfer") : null, inv.id);
         if (certState && inv.status !== "rejected") prevCert += certGross;
         if (paid && syncedLeft > 0 && inv.invoice_date < addDays(o.today, -120)) {
           db.prepare("UPDATE sub_invoices SET erp_sync_status='synced', erp_doc_no=?, erp_synced_at=? WHERE id=?").run(`AP-${year}-${String(1200 + inv.id)}`, `${addDays(inv.invoice_date, 40)}T09:00:00.000Z`, inv.id); syncedLeft--;
         } else if (paid && failedLeft > 0 && inv.invoice_date < addDays(o.today, -60)) {
-          db.prepare("UPDATE sub_invoices SET erp_sync_status='failed', erp_error=? WHERE id=?").run("Supplier TRN does not match the ERP vendor master (AP-VEND-0412).", inv.id); failedLeft--;
+          db.prepare("UPDATE sub_invoices SET erp_sync_status='failed', erp_error=? WHERE id=?").run(PROFILE.invoices.erpError, inv.id); failedLeft--;
         }
         if (long && (certState || longId === null)) longId = inv.id; // latest certified / approved / paid long invoice
-        if (a.project_id === 2 && !long && certState && cut < 0.5 && certLines.some((c) => c.remark) && lines.length >= 3) {
+        if (a.project_id === baseProject + 1 && !long && certState && cut < 0.5 && certLines.some((c) => c.remark) && lines.length >= 3) {
           const score = (inv.status === "paid" ? 2 : 1) + lines.length / 10;
           if (!showcase || score > showcase.score) showcase = { id: inv.id, score };
         }
@@ -148,7 +149,7 @@ export function seedInvoiceDetails(db: DB, o: { today: string; users: { clerk: n
 
 type Rp = typeof import("@react-pdf/renderer");
 const h = React.createElement;
-const money = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: currencyDecimals(CUR), maximumFractionDigits: currencyDecimals(CUR) });
 const q3 = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 3 });
 const ACCENTS = ["#1D4ED8", "#047857", "#B45309", "#475569", "#9333EA", "#BE123C", "#0F766E", "#4D7C0F"];
 
@@ -165,18 +166,18 @@ function taxInvoicePdf(rp: Rp, d: any): React.ReactElement {
     h(Page, { size: "A4", style: { padding: 40, fontFamily: "Helvetica", fontSize: 9 } },
       h(View, { style: { borderBottomWidth: 2, borderBottomColor: accent, paddingBottom: 8, marginBottom: 12 } },
         h(Text, { style: { fontSize: 16, fontFamily: "Helvetica-Bold", color: accent } }, d.sub_name),
-        h(Text, { style: { color: "#475569" } }, d.address ?? "United Arab Emirates"),
-        h(Text, { style: { color: "#475569" } }, `TRN: ${d.tax_no ?? "—"}   Tel: ${d.phone ?? "—"}   ${d.email ?? ""}`)),
+        h(Text, { style: { color: "#475569" } }, d.address ?? PROFILE.tenant.country),
+        h(Text, { style: { color: "#475569" } }, `${TAXL}: ${d.tax_no ?? "—"}   Tel: ${d.phone ?? "—"}   ${d.email ?? ""}`)),
       h(Text, { style: { fontSize: 14, fontFamily: "Helvetica-Bold", marginBottom: 8 } }, "TAX INVOICE"),
       h(View, { style: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 } },
-        h(View, null, h(Text, { style: { fontFamily: "Helvetica-Bold" } }, "Invoice to"), h(Text, null, d.company), h(Text, null, d.company_address), h(Text, null, `TRN: ${d.company_trn}`)),
+        h(View, null, h(Text, { style: { fontFamily: "Helvetica-Bold" } }, "Invoice to"), h(Text, null, d.company), h(Text, null, d.company_address), h(Text, null, `${TAXL}: ${d.company_trn}`)),
         h(View, null, h(Text, null, `Invoice no: ${d.ref}`), h(Text, null, `Date: ${d.invoice_date}`), h(Text, null, `Period: ${d.period_from ?? "—"} to ${d.period_to ?? "—"}`), h(Text, null, `Project: ${d.project_code} / ${d.assignment_code}`))),
       row(["#", "Description", "Unit", "Qty", "Rate", "Amount"], W, true, "#E2E8F0"),
       ...d.lines.map((l: any, i: number) => row([i + 1, l.description, l.unit ?? "", q3(l.this_qty), money(l.rate), money(l.amount)], W)),
       h(View, { style: { alignSelf: "flex-end", width: 200, marginTop: 10 } },
-        h(View, { style: { flexDirection: "row", justifyContent: "space-between" } }, h(Text, null, "Total (excl. VAT)"), h(Text, null, `AED ${money(d.subtotal)}`)),
-        h(View, { style: { flexDirection: "row", justifyContent: "space-between" } }, h(Text, null, "VAT 5%"), h(Text, null, `AED ${money(d.vat_amount)}`)),
-        h(View, { style: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, marginTop: 2, paddingTop: 2 } }, h(Text, { style: { fontFamily: "Helvetica-Bold" } }, "Total due"), h(Text, { style: { fontFamily: "Helvetica-Bold" } }, `AED ${money(d.gross)}`))),
+        h(View, { style: { flexDirection: "row", justifyContent: "space-between" } }, h(Text, null, "Total (excl. VAT)"), h(Text, null, `${CUR} ${money(d.subtotal)}`)),
+        h(View, { style: { flexDirection: "row", justifyContent: "space-between" } }, h(Text, null, `VAT ${VAT}%`), h(Text, null, `${CUR} ${money(d.vat_amount)}`)),
+        h(View, { style: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, marginTop: 2, paddingTop: 2 } }, h(Text, { style: { fontFamily: "Helvetica-Bold" } }, "Total due"), h(Text, { style: { fontFamily: "Helvetica-Bold" } }, `${CUR} ${money(d.gross)}`))),
       h(Text, { style: { marginTop: 18, color: "#475569" } }, `Bank: ${d.bank_name ?? "—"}   Payment terms: ${d.payment_days} days from certification.`),
       h(View, { style: { marginTop: 36, width: 180, borderTopWidth: 1, paddingTop: 3 } }, h(Text, null, `For ${d.sub_name}`), h(Text, { style: { color: "#64748B", fontSize: 8 } }, "Authorised signatory"))));
 }
@@ -250,11 +251,12 @@ function photoSvg(kind: number, caption: string, stamp: string, seed: number): s
 }
 
 /** Async part: writes the attachment files and rows for every invoice. */
-export async function seedInvoiceDocuments(db: DB, o: { uploads: string; users: { clerk: number }; company: { name: string; address: string; trn: string } }): Promise<number> {
+export async function seedInvoiceDocuments(db: DB, o: { uploads: string; entityId: number; users: { clerk: number }; company: { name: string; address: string; trn: string } }): Promise<number> {
+  loadRegion();
   const rp = await import("@react-pdf/renderer");
   const invs = db.prepare(`SELECT i.id, i.invoice_no, i.invoice_date, i.period_from, i.period_to, i.sub_invoice_ref ref, i.subtotal, i.vat_amount, i.gross_amount gross, i.source, i.created_at,
       a.code assignment_code, a.payment_days, p.code project_code, p.name project_name, s.id sub_id, s.name sub_name, s.address, s.tax_no, s.phone, s.email, s.bank_name
-    FROM sub_invoices i JOIN assignments a ON a.id = i.assignment_id JOIN projects p ON p.id = i.project_id JOIN subcontractors s ON s.id = a.subcontractor_id ORDER BY i.id`).all() as any[];
+    FROM sub_invoices i JOIN assignments a ON a.id = i.assignment_id JOIN projects p ON p.id = i.project_id JOIN subcontractors s ON s.id = a.subcontractor_id WHERE p.entity_id = ? ORDER BY i.id`).all(o.entityId) as any[];
   const ins = db.prepare("INSERT INTO attachments(entity_type, entity_id, category, filename, stored_path, mime, size, uploaded_by, note, created_at) VALUES ('sub_invoice',?,?,?,?,?,?,?,?,?)");
   const lines = db.prepare("SELECT * FROM sub_invoice_lines WHERE invoice_id = ? ORDER BY line_no");
   let files = 0;

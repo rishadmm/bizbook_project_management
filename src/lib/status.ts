@@ -40,7 +40,7 @@ export const ENUMS = {
   },
   clientType: {
     government: e("Government", "blue"), road_authority: e("Road authority", "indigo"), telecom: e("Telecom", "violet"),
-    utility: e("Utility", "cyan"), private: e("Private", "slate"), other: e("Other", "slate"),
+    utility: e("Utility", "cyan"), oil_gas: e("Oil & gas", "orange"), private: e("Private", "slate"), other: e("Other", "slate"),
   },
   tenderKind: { tender: e("Tender", "blue"), proposal: e("Proposal", "violet"), rfq: e("RFQ", "cyan"), eoi: e("EOI", "slate") },
   category: {
@@ -83,7 +83,8 @@ export const ENUMS = {
   docType: {
     trade_license: e("Trade license", "blue"), tax_certificate: e("Tax certificate", "indigo"), insurance: e("Insurance", "teal"),
     hse_certificate: e("HSE certificate", "emerald"), bank_letter: e("Bank letter", "slate"), company_profile: e("Company profile", "slate"),
-    iso: e("ISO", "violet"), other: e("Other", "slate"),
+    iso: e("ISO", "violet"), registration: e("Contractor registration", "indigo"), chamber: e("Chamber membership", "slate"), labour: e("Labour compliance", "teal"),
+    other: e("Other", "slate"),
   },
   docStatus: { pending: e("Pending", "amber"), pending_review: e("Pending review", "violet"), verified: e("Verified", "green"), expired: e("Expired", "red"), rejected: e("Rejected", "rose") },
   assignmentStatus: {
@@ -104,6 +105,17 @@ export const ENUMS = {
   certStatus: { draft: e("Draft", "slate"), requested: e("Requested", "amber"), issued: e("Issued", "green"), rejected: e("Rejected", "red") },
   issueStatus: { open: e("Open", "red"), mitigating: e("Mitigating", "amber"), closed: e("Closed", "green") },
   rag: { green: e("On track", "green"), amber: e("At risk", "amber"), red: e("Critical", "red"), grey: e("No data", "slate") },
+  // supplier tendering (SUPPLIER_TENDERING_SPEC Part B)
+  rfxStatus: {
+    draft: e("Draft", "slate"), pending_approval: e("Pending approval", "amber"), scheduled: e("Scheduled", "cyan"), published: e("Published", "blue"), closed: e("Closed", "indigo"),
+    opening: e("Opened", "violet"), evaluation: e("In evaluation", "orange"), recommended: e("Recommended", "teal"), award_pending: e("Award pending", "amber"), awarded: e("Awarded", "green"), cancelled: e("Cancelled", "red"),
+  },
+  rfxBidStatus: {
+    draft: e("Draft", "slate"), submitted: e("Submitted", "blue"), withdrawn: e("Withdrawn", "slate"), late_refused: e("Late (refused)", "red"), disqualified: e("Disqualified", "red"),
+    qualified: e("Qualified", "teal"), awarded: e("Awarded", "green"), unsuccessful: e("Unsuccessful", "slate"),
+  },
+  rfxProcedure: { open: e("Open", "blue"), selective: e("Selective", "violet") },
+  rfxMethod: { lowest_compliant: e("Lowest compliant", "slate"), weighted: e("Weighted score", "indigo"), two_envelope_weighted: e("Two-envelope weighted", "violet") },
 } satisfies Record<string, EnumMap>;
 
 export type EnumKind = keyof typeof ENUMS;
@@ -134,6 +146,7 @@ export const DEPARTMENTS: ReadonlyArray<readonly [string, string]> = [
 
 /** Attachment categories per entity type (suggestions for AttachmentsPanel). */
 export const ATTACHMENT_CATEGORIES: Record<string, string[]> = {
+  rfx: ["Drawings", "Specifications", "Conditions of contract", "BOQ", "Addendum", "Other"],
   tender: ["RFP", "Drawings", "Technical", "Commercial", "Submission", "Correspondence", "Bid bond"],
   project: ["Contract", "Drawings", "Reports", "Permits", "Correspondence", "Photos", "Other"],
   stage: ["Drawings", "Photos", "Reports", "Other"],

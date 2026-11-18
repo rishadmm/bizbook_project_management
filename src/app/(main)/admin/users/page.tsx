@@ -29,20 +29,20 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
       </form>
       <CardSection flush>
         <Table>
-          <THead><TR><TH>Name</TH><TH>Email</TH><TH>Department</TH><TH>Role</TH><TH>Status</TH><TH>Last login</TH></TR></THead>
+          <THead><TR><TH>Name</TH><TH>Email</TH><TH>Department</TH><TH>Role</TH><TH>Countries</TH><TH>Status</TH><TH>Last login</TH></TR></THead>
           <TBody>
             {rows.map((u) => {
               const locked = u.status === "locked" && parseDbDate(u.locked_until) > Date.now();
               return (
                 <TR key={u.id} data-user={u.email ?? u.id}>
                   <TD><Link href={`/admin/users/${u.id}`} className="font-medium text-blue-700 hover:underline">{u.name}</Link>{u.must_change_password ? <span className="ml-2 text-[10px] uppercase text-amber-600">must change pw</span> : null}</TD>
-                  <TD>{u.email ?? "—"}</TD><TD>{u.department_name ?? "—"}</TD><TD>{u.role_name ?? u.role}</TD>
+                  <TD>{u.email ?? "—"}</TD><TD>{u.department_name ?? "—"}</TD><TD>{u.role_name ?? u.role}</TD><TD className="whitespace-nowrap text-xs">{u.entities ?? "—"}</TD>
                   <TD>{u.status === "disabled" ? <Badge tone="slate">Disabled</Badge> : locked ? <Badge tone="red">Locked</Badge> : <Badge tone="emerald">Active</Badge>}</TD>
                   <TD>{u.last_login_at ? formatDateTime(u.last_login_at) : "Never"}</TD>
                 </TR>
               );
             })}
-            {rows.length === 0 && <TR><TD colSpan={6} className="py-6 text-center text-slate-400">No users match.</TD></TR>}
+            {rows.length === 0 && <TR><TD colSpan={7} className="py-6 text-center text-slate-400">No users match.</TD></TR>}
           </TBody>
         </Table>
       </CardSection>

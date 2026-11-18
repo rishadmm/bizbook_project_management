@@ -3,16 +3,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  Award, Bell, Building2, ChevronDown, ClipboardList, Eye, FileText, FolderKanban, LayoutDashboard, LogOut, Menu, MessageSquareWarning, Receipt, UserRound, Users, Wallet, X, type LucideIcon,
+  Award, BadgeCheck, Bell, Building2, ChevronDown, ClipboardList, Eye, FileText, FolderKanban, LayoutDashboard, LogOut, Menu, MessageSquareWarning, Receipt, UserRound, Users, Wallet, X, type LucideIcon,
+  Gavel,
 } from "lucide-react";
 import { cn } from "@/components/ui/cn";
 import { exitAdminView, portalSignOut } from "../auth-actions";
 
-export interface NavEntry { key: string; href: string; label: string }
-export interface Note { key: string; title: string; detail: string; href: string; kind: "action" | "event" }
+export interface NavEntry { key: string; href: string; label: string; badge?: number }
+export interface Note { key: string; title: string; detail: string; href: string; kind: "action" | "event" | "notice"; unread?: boolean }
 
 const ICONS: Record<string, LucideIcon> = {
-  dashboard: LayoutDashboard, projects: FolderKanban, progress: ClipboardList, invoices: Receipt, certificates: Award, payments: Wallet, issues: MessageSquareWarning, documents: FileText, team: Users, account: UserRound,
+  dashboard: LayoutDashboard, registration: BadgeCheck, projects: FolderKanban, progress: ClipboardList, invoices: Receipt, certificates: Award, payments: Wallet, issues: MessageSquareWarning, documents: FileText, team: Users, account: UserRound, tenders: Gavel,
 };
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
 
@@ -26,7 +27,7 @@ function NavLinks({ nav, base, onNavigate }: { nav: NavEntry[]; base: string; on
         return (
           <Link key={n.key} href={n.href} onClick={onNavigate} aria-current={active ? "page" : undefined}
             className={cn("flex items-center gap-3 rounded-[10px] px-3 py-2 text-sm font-semibold transition-colors", active ? "bg-primary text-white shadow-brand-sm" : "text-slate-300 hover:bg-white/[0.06] hover:text-white")}>
-            <Icon size={17} /><span className="flex-1">{n.label}</span>
+            <Icon size={17} /><span className="flex-1">{n.label}</span>{n.badge ? <span data-testid={`nav-badge-${n.key}`} className="min-w-5 rounded-full bg-danger px-1.5 text-center text-[10px] font-bold leading-5 text-white">{n.badge}</span> : null}
           </Link>
         );
       })}
@@ -38,6 +39,8 @@ function Bell_({ notes, slug }: { notes: Note[]; slug: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const actions = notes.filter((n) => n.kind === "action");
+  const notices = notes.filter((n) => n.kind === "notice");
+  const badge = actions.length + notices.filter((n) => n.unread).length;
   useEffect(() => {
     if (!open) return;
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -48,10 +51,12 @@ function Bell_({ notes, slug }: { notes: Note[]; slug: string }) {
     <div ref={ref} className="relative">
       <button type="button" aria-label="Notifications" data-testid="portal-bell" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="relative flex h-9 w-9 items-center justify-center rounded-full text-slate-500 hover:bg-primary-50 hover:text-primary">
         <Bell size={18} />
-        {actions.length > 0 && <span data-testid="portal-bell-count" className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-4 text-white">{actions.length}</span>}
+        {badge > 0 && <span data-testid="portal-bell-count" className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-4 text-white">{badge}</span>}
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-2xl border border-line bg-white py-1.5 shadow-card">
+          {notices.length > 0 && <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-muted">Notifications ({notices.filter((n) => n.unread).length} new)</div>}
+          {notices.map((n) => <Link key={n.key} href={n.href} prefetch={false} onClick={() => setOpen(false)} data-testid="portal-notice" className={cn("block px-3 py-2 hover:bg-primary-50", n.unread && "bg-primary-50/60")}><div className={cn("text-sm text-dark", n.unread ? "font-bold" : "font-semibold")}>{n.title}</div><div className="truncate text-xs text-slate-500">{n.detail}</div></Link>)}
           <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-muted">Needs your attention ({actions.length})</div>
           {actions.length === 0 && <div className="px-3 pb-2 text-sm text-slate-400">You are all caught up.</div>}
           {actions.map((n) => <Link key={n.key} href={n.href} onClick={() => setOpen(false)} className="block px-3 py-2 hover:bg-primary-50"><div className="text-sm font-bold text-dark">{n.title}</div><div className="truncate text-xs text-slate-500">{n.detail}</div></Link>)}
@@ -98,7 +103,7 @@ export default function PortalShell({ slug, companyName, tenant, user, nav, note
   const [drawer, setDrawer] = useState(false);
   const path = usePathname();
   useEffect(() => { setDrawer(false); }, [path]);
-  const bottom = nav.filter((n) => ["dashboard", "projects", "progress", "invoices", "issues"].includes(n.key)).slice(0, 5);
+  const bottom = nav.filter((n) => ["dashboard", "registration", "documents", "projects", "progress", "invoices", "issues"].includes(n.key)).slice(0, 5);
   const brand = (
     <div className="px-4 pb-3 pt-4">
       <div className="flex items-center gap-2.5">

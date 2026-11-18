@@ -6,25 +6,16 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import type { DB } from "./db";
 import { DEMO_CLIENT_PASSWORD, insertClientUser } from "./client-portal-core";
+import { getRegionProfile } from "./seed-regions";
 
-interface Ctx { today: string; uploads: string; admin: number }
-interface CUser { name: string; role: "admin" | "viewer"; title: string; state?: "must_change" | "disabled"; scopeCode?: string }
-interface CCfg { slug: string; users: CUser[]; showSubs?: boolean; showFin?: boolean; note: string }
-
-// clientId -> configuration (clients 4 and 7 have no projects: no portal)
-const CFG: Record<number, CCfg> = {
-  1: { slug: "rta", note: "all visible", users: [{ name: "Khalid Al Mansoori", role: "admin", title: "Director of Road Projects" }, { name: "Noor Al Hashimi", role: "viewer", title: "Project Engineer" }] },
-  2: { slug: "etisalat-telecom", note: "viewer scoped to PRJ-2026-002", users: [{ name: "Mona Al Suwaidi", role: "admin", title: "Head of Network Build" }, { name: "Hassan Qureshi", role: "viewer", title: "Programme Analyst", scopeCode: "PRJ-2026-002" }, { name: "Dana Mourad", role: "viewer", title: "PMO Lead" }] },
-  3: { slug: "water-electricity", showFin: false, note: "financials hidden", users: [{ name: "Yousef Rahimi", role: "admin", title: "Capital Works Manager" }, { name: "Latifa Al Ketbi", role: "viewer", title: "Planning Engineer", state: "must_change" }] },
-  5: { slug: "skyline", note: "one disabled viewer", users: [{ name: "James Whitfield", role: "admin", title: "Development Manager" }, { name: "Amelia Grant", role: "viewer", title: "Project Coordinator", state: "disabled" }] },
-  6: { slug: "ad-mobility", showSubs: false, note: "subcontractor names hidden", users: [{ name: "Saeed Al Dhaheri", role: "admin", title: "Programme Director" }, { name: "Fahad Al Nuaimi", role: "viewer", title: "Site Liaison" }, { name: "Mariam Al Shamsi", role: "viewer", title: "Quality Officer" }] },
-};
-
+interface Ctx { today: string; uploads: string; admin: number; /** only this country's clients are seeded */ entityId: number; /** document prefix of the country (project codes in the profile are unprefixed) */ prefix: string }
 const SVG = (label: string, hue: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="hsl(${hue},45%,82%)"/><stop offset="1" stop-color="hsl(${hue},25%,92%)"/></linearGradient></defs><rect width="640" height="420" fill="url(#g)"/><rect y="270" width="640" height="150" fill="#94a3b8"/><rect x="40" y="236" width="560" height="26" fill="#475569"/><rect x="120" y="150" width="90" height="86" fill="#f59e0b"/><rect x="210" y="190" width="120" height="14" fill="#f59e0b"/><circle cx="540" cy="80" r="36" fill="#fbbf24"/><text x="24" y="44" font-family="sans-serif" font-size="22" fill="#0f172a">${label}</text></svg>`;
 
 export interface ClientSeedResult { rows: { client: string; slug: string | null; enabled: boolean; admin: string | null; note: string }[] }
 
 export function seedClientPortal(db: DB, c: Ctx): ClientSeedResult {
+  const P = getRegionProfile().clientPortal;
+  const CFG = P.cfg;
   const iso = (daysAgo: number, hh = 8, mm = 0) => { const d = new Date(Date.now() - daysAgo * 86_400_000); d.setUTCHours(hh, mm, 0, 0); return d.toISOString(); };
   const all = <T = any>(sql: string, ...a: unknown[]) => db.prepare(sql).all(...(a as any[])) as T[];
   const one = <T = any>(sql: string, ...a: unknown[]) => db.prepare(sql).get(...(a as any[])) as T | undefined;
@@ -34,19 +25,20 @@ export function seedClientPortal(db: DB, c: Ctx): ClientSeedResult {
   const adminName = one<{ name: string }>("SELECT name FROM users WHERE id = ?", c.admin)?.name ?? "Administrator";
   const rows: ClientSeedResult["rows"] = [];
 
-  for (const cl of all<{ id: number; name: string; email: string | null }>("SELECT id, name, email FROM clients ORDER BY id")) {
-    const cfg = CFG[cl.id];
+  const localIdx = new Map(all<{ id: number }>("SELECT id FROM clients WHERE entity_id = ? ORDER BY id", c.entityId).map((r, i) => [r.id, i + 1]));
+  for (const cl of all<{ id: number; name: string; email: string | null }>("SELECT id, name, email FROM clients WHERE entity_id = ? ORDER BY id", c.entityId)) {
+    const cfg = CFG[localIdx.get(cl.id)!]; // the profile config is keyed by the client's 1-based position within its country
     const projects = all<{ id: number; code: string }>("SELECT id, code FROM projects WHERE client_id = ? ORDER BY id", cl.id);
     if (!cfg || projects.length === 0) { rows.push({ client: cl.name, slug: null, enabled: false, admin: null, note: "no projects: no portal" }); continue; }
     db.prepare("UPDATE clients SET portal_slug = ?, portal_enabled = 1, portal_show_subcontractors = ?, portal_show_financials = ? WHERE id = ?").run(cfg.slug, cfg.showSubs === false ? 0 : 1, cfg.showFin === false ? 0 : 1, cl.id);
-    const domain = (cl.email ?? "client-demo.ae").split("@")[1] ?? "client-demo.ae";
+    const domain = (cl.email ?? `x@${P.defaultDomain}`).split("@")[1] ?? P.defaultDomain;
     let adminEmail: string | null = null;
     cfg.users.forEach((u, k) => {
       const local = u.name.toLowerCase().replace(/[^a-z\s]/g, "").trim().split(/\s+/).filter((w, i, a) => i === 0 || i === a.length - 1).join(".");
       const email = `${local}@${domain}`;
       const created = iso(45 - k * 4 - cl.id);
-      const scope = u.scopeCode ? projects.filter((p) => p.code === u.scopeCode).map((p) => p.id) : null;
-      const id = insertClientUser(db, { clientId: cl.id, name: u.name, email, jobTitle: u.title, phone: `+971 4 ${String(3000000 + cl.id * 7711 + k * 211).slice(0, 3)} ${String(5000 + cl.id * 83 + k * 17).padStart(4, "0")}`, role: u.role, password: DEMO_CLIENT_PASSWORD,
+      const scope = u.scopeCode ? projects.filter((p) => p.code === c.prefix + u.scopeCode).map((p) => p.id) : null;
+      const id = insertClientUser(db, { clientId: cl.id, name: u.name, email, jobTitle: u.title, phone: P.phone(localIdx.get(cl.id)!, k), role: u.role, password: DEMO_CLIENT_PASSWORD,
         mustChange: u.state === "must_change", createdBy: c.admin, createdAt: created, status: u.state === "disabled" ? "disabled" : "active", scope });
       if (u.role === "admin" && !adminEmail) adminEmail = email;
       ev(cl.id, id, email, "user_created", 45 - k * 4 - cl.id, `Created by ${adminName} (${u.role})`, 9, 10 + k);

@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 import { Badge, CardSection, ProgressBar, Stat, StatusBadge } from "@/components/ui";
 import { can, requirePage } from "@/lib/auth";
-import { formatDate, formatDateTime, formatMoney, formatNumber } from "@/lib/format";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
+import { currencyDecimals, formatDate, formatDateTime, formatMoney, formatNumber } from "@/lib/format";
 import { fromGross } from "@/features/invoices/calc";
 import AttachmentsCard from "@/features/invoices/components/AttachmentsCard";
 import ErpCard from "@/features/invoices/components/ErpCard";
@@ -23,9 +26,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const id = Number((await params).id);
   const d = Number.isInteger(id) ? getInvoiceDetail(id) : null;
   if (!d) notFound();
+  const rec = await assertRecordAccess(d.entity.id);
   const i = d.invoice;
   const cur = i.currency || "AED";
-  const m = (v: number) => formatMoney(v, { decimals: 2, currency: cur });
+  const m = (v: number) => formatMoney(v, { decimals: currencyDecimals(cur), currency: cur });
   const path = `/invoices/${i.id}`;
   const unit = d.assignment.quantity_unit ?? "";
   // cumulative statement (ex-VAT certified against the contract value)
@@ -34,7 +38,8 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const cumPaid = d.statement.reduce((s, r) => s + r.paid, 0);
   const cumPct = d.assignment.contract_value > 0 ? (cumCertified / d.assignment.contract_value) * 100 : 0;
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="invoice" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <div className="mb-5">
         <div className="no-print mb-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
           <Link href="/projects" className="hover:text-primary">Projects</Link><span>/</span>
@@ -129,6 +134,6 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           </CardSection>
         </aside>
       </div>
-    </>
+    </CurrencyProvider>
   );
 }

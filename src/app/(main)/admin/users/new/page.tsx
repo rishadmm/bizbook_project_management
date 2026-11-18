@@ -6,13 +6,14 @@ import { UserForm } from "@/features/admin/components/forms";
 
 export default async function NewUserPage() {
   const me = await requirePage("users", "create");
-  const { departments, roles, users } = lookups();
+  const { departments, roles, users, entities } = lookups();
   return (
     <>
       <PageHeader title="New user" breadcrumbs={[{ label: "Users", href: "/admin/users" }, { label: "New" }]} />
       <CardSection>
         <UserForm mode="create" departments={departments.map((d) => ({ value: d.id, label: d.name }))}
-          roles={roles.filter((r) => r.code !== "super_admin" || me.isSuperAdmin).map((r) => ({ value: r.id, label: r.name }))} users={users.map((u) => ({ value: u.id, label: u.name }))} />
+          roles={roles.filter((r) => r.code !== "super_admin" || me.isSuperAdmin).map((r) => ({ value: r.id, label: r.name }))} users={users.map((u) => ({ value: u.id, label: u.name }))}
+          entities={entities.map((e) => ({ id: e.id, label: e.country, flag: e.flag }))} />
       </CardSection>
     </>
   );

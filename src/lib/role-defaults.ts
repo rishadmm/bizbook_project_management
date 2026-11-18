@@ -16,7 +16,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
     code: "management", name: "Management", description: "Executive oversight and approvals.",
     perms: {
       ...view("dashboard", "lost_analysis", "projects", "ops_map", "project_map", "progress", "project_costs", "certificates", "clients", "approvals", "audit", "tender_budget"),
-      tenders: ["view", "approve", "export"], tender_budget: ["view", "export"], subcontractors: ["view", "approve"], invoices: ["view", "approve"],
+      tenders: ["view", "approve", "export"], tender_budget: ["view", "export"], subcontractors: ["view", "approve"], invoices: ["view", "approve"], procurement: ["view"],
     },
   },
   {
@@ -24,7 +24,7 @@ export const SYSTEM_ROLES: SystemRole[] = [
     perms: {
       ...EVERYONE, ...view("tenders", "ops_map"), clients: ["view", "portal"],
       projects: ["view", "create", "edit"], project_map: ["view", "edit"], progress: ["view", "create", "verify"], project_costs: ["view", "create"],
-      subcontractors: ["view", "create", "edit"], invoices: ["view"], certificates: ["view", "issue"],
+      subcontractors: ["view", "create", "edit"], invoices: ["view"], certificates: ["view", "issue"], procurement: ["view", "create", "evaluate"],
     },
   },
   {
@@ -39,24 +39,27 @@ export const SYSTEM_ROLES: SystemRole[] = [
     code: "engineer", name: "Engineer", description: "Site engineering: progress and map.",
     perms: {
       ...EVERYONE, ...view("tenders", "tender_budget", "projects", "ops_map", "project_costs", "subcontractors", "certificates"),
-      project_map: ["view", "edit"], progress: ["view", "create"],
+      project_map: ["view", "edit"], progress: ["view", "create"], procurement: ["view", "evaluate"],
     },
   },
   {
     code: "finance", name: "Finance", description: "Invoices, certification, payment and costs.",
     perms: {
       ...EVERYONE, ...view("tenders", "tender_budget", "projects", "ops_map", "subcontractors", "certificates", "clients"),
-      invoices: ["view", "certify", "approve", "pay"], project_costs: ["view", "create"],
+      invoices: ["view", "certify", "approve", "pay"], project_costs: ["view", "create"], procurement: ["view", "evaluate", "export"],
     },
   },
   { code: "hr", name: "HR", description: "Human resources.", perms: { ...EVERYONE, ...view("projects", "ops_map", "users") } },
   {
-    code: "procurement", name: "Procurement", description: "Subcontractor onboarding and procurement.",
-    perms: { ...EVERYONE, ...view("projects", "ops_map", "invoices", "clients"), subcontractors: ["view", "create", "edit", "approve", "portal"] },
+    code: "procurement", name: "Procurement officer", description: "Supplier registration review, prequalification and supplier tendering (everything except the award approval).",
+    perms: {
+      ...EVERYONE, ...view("projects", "ops_map", "invoices", "clients"), subcontractors: ["view", "create", "edit", "approve", "portal", "setup"],
+      procurement: all("procurement").filter((a) => a !== "award"),
+    },
   },
   {
     code: "viewer", name: "Viewer", description: "Read-only access.",
-    perms: { ...EVERYONE, ...view("tenders", "tender_budget", "lost_analysis", "projects", "ops_map", "project_map", "progress", "project_costs", "subcontractors", "invoices", "certificates", "clients") },
+    perms: { ...EVERYONE, ...view("tenders", "tender_budget", "lost_analysis", "projects", "ops_map", "project_map", "progress", "project_costs", "subcontractors", "invoices", "certificates", "clients", "procurement") },
   },
 ];
 

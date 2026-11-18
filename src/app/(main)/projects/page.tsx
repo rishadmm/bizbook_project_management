@@ -8,7 +8,7 @@ import { listProjects, listRegions, type ProjectListItem } from "@/features/proj
 import { IndexChip, RagChip } from "@/features/projects/components/common";
 import { portfolioFeatures, RAG_LEGEND } from "@/features/projects/components/mapfeatures";
 import { barTone } from "@/features/projects/components/tabs1";
-import { requirePage } from "@/lib/auth";
+import { getActiveEntity, requirePage } from "@/lib/auth";
 
 type SP = { status?: string; category?: string; region?: string; q?: string; view?: string };
 
@@ -71,7 +71,8 @@ function Row({ p, child }: { p: ProjectListItem; child?: boolean }) {
 export default async function ProjectsPage({ searchParams }: { searchParams: Promise<SP> }) {
   await requirePage("projects");
   const sp = await searchParams;
-  const all = listProjects();
+  const entity = await getActiveEntity();
+  const all = listProjects(entity.id);
   const view = sp.view === "table" || sp.view === "map" ? sp.view : "cards";
   const q = (sp.q ?? "").toLowerCase();
   const filtered = all.filter((p) =>
@@ -103,7 +104,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
         <input name="q" defaultValue={sp.q ?? ""} placeholder="Search code, name, client…" className="w-56 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
         <Select name="status" defaultValue={sp.status ?? ""} options={statusOptions("projectStatus")} placeholder="All statuses" className="!w-40" />
         <Select name="category" defaultValue={sp.category ?? ""} options={statusOptions("category")} placeholder="All categories" className="!w-40" />
-        <Select name="region" defaultValue={sp.region ?? ""} options={listRegions().map((r) => ({ value: r, label: r }))} placeholder="All regions" className="!w-40" />
+        <Select name="region" defaultValue={sp.region ?? ""} options={listRegions(entity.id).map((r) => ({ value: r, label: r }))} placeholder="All regions" className="!w-40" />
         <Button type="submit" variant="primary">Filter</Button>
         <Link href={`/projects?view=${view}`} className="px-1 py-2 text-sm text-slate-500 hover:underline">Clear</Link>
         <div className="ml-auto flex overflow-hidden rounded-md border border-slate-300 text-sm">

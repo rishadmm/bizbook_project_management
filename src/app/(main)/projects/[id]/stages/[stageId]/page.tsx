@@ -18,6 +18,9 @@ import { getAssignments, getInvoices, getProjectRow, getReports } from "@/featur
 import { esc, parseFeatures } from "@/features/projects/geo";
 import type { MapFeature } from "@/components/map/types";
 import { requirePage } from "@/lib/auth";
+import { assertRecordAccess } from "@/lib/entity-context";
+import CurrencyProvider from "@/components/CurrencyProvider";
+import EntityBar from "@/components/shell/EntityBar";
 
 export default async function StagePage({ params }: { params: Promise<{ id: string; stageId: string }> }) {
   await requirePage("projects");
@@ -27,6 +30,7 @@ export default async function StagePage({ params }: { params: Promise<{ id: stri
   const db = getDb();
   const stage = Number.isInteger(sid) ? (db.prepare("SELECT * FROM stages WHERE id = ? AND project_id = ?").get(sid, id) as Stage | undefined) : undefined;
   if (!project || !stage) notFound();
+  const rec = await assertRecordAccess(project.entity_id);
 
   const prog = getStageProgress(sid);
   const assignments = getAssignments(id).filter((a) => a.stage_id === sid);
@@ -54,7 +58,8 @@ export default async function StagePage({ params }: { params: Promise<{ id: stri
   const so = [{ value: stage.id, label: stage.name }];
   void so;
   return (
-    <>
+    <CurrencyProvider currency={rec.entity.currency}>
+      {rec.foreign && <EntityBar what="project" entityCode={rec.entity.code} entityName={rec.entity.country} activeName={rec.active.country} />}
       <PageHeader
         breadcrumbs={[{ label: "Projects", href: "/projects" }, { label: project.code, href: `/projects/${id}` }, { label: "Stages", href: `/projects/${id}?tab=stages` }, { label: stage.code ?? stage.name }]}
         title={`${stage.code ? stage.code + " · " : ""}${stage.name}`}
@@ -137,6 +142,6 @@ export default async function StagePage({ params }: { params: Promise<{ id: stri
         <AttachmentsPanel entityType="stage" entityId={sid} revalidate={`/projects/${id}/stages/${sid}`} />
         <ActivityTimeline entityType="stage" entityId={sid} />
       </div>
-    </>
+    </CurrencyProvider>
   );
 }

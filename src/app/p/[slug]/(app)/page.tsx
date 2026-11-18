@@ -4,7 +4,12 @@ import { Badge, CardSection, PageHeader, ProgressBar, Stat, Table, TBody, TD, TH
 import { ProjectMapLazy } from "@/components/map/ProjectMap";
 import { SCurveChart } from "@/features/projects/components/Charts";
 import { formatDate, formatMoney, formatRatio, pct, todayISO } from "@/lib/format";
-import { requirePortalUser } from "@/lib/portal-auth";
+import { isRestricted, requirePortalUser } from "@/lib/portal-auth";
+import { portalCan } from "@/lib/portal-core";
+import { getDb } from "@/lib/db";
+import { getProfile } from "@/features/supplier-registration/core";
+import RestrictedDashboard from "@/features/supplier-registration/components/RestrictedDashboard";
+import RegistrationBanner from "@/features/supplier-registration/components/RegistrationBanner";
 import { STATUS_COLOR } from "@/features/ops-map/calc";
 import { getActionItems, getRecentEvents, getStatement, listAssignments } from "@/features/portal/data";
 import { companySCurve, companySegments, dashboardMapFeatures, daysLabel, scheduleHealth } from "@/features/portal/ops";
@@ -16,6 +21,8 @@ export const metadata = { title: "Dashboard" };
 export default async function PortalDashboard({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const s = await requirePortalUser(slug, "dashboard");
+  const profile = getProfile(getDb(), s.sub.id);
+  if (profile && isRestricted(s.sub)) return <RestrictedDashboard p={profile} slug={slug} userName={s.user.name} canEdit={portalCan(s.user.role, "registration")} />;
   const asgs = listAssignments(s);
   const live = asgs.filter((a) => ["active", "suspended", "completed"].includes(a.status));
   const stmt = getStatement(s);
@@ -30,6 +37,7 @@ export default async function PortalDashboard({ params }: { params: Promise<{ sl
   const sum = (k: "certified" | "paid" | "retention" | "outstanding") => stmt.reduce((t, r) => t + r[k], 0);
   return (
     <>
+      {profile && <RegistrationBanner p={profile} slug={slug} entityName={s.entity.legal_name} includeApproved />}
       <PageHeader title={`Welcome, ${s.user.name.split(" ")[0]}`} description={`${s.sub.name} · ${formatDate(todayISO())}`} />
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-7" data-testid="kpis">
         <Stat label="Active subcontracts" value={asgs.filter((a) => a.status === "active").length} hint={`${asgs.length} in total`} icon={<BriefcaseBusiness />} />

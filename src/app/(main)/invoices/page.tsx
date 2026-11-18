@@ -7,7 +7,7 @@ import { statusLabel } from "@/lib/status";
 import type { InvoiceStatus } from "@/lib/types";
 import { approveInvoice, certifyInvoice, payInvoice, rejectInvoice, startInvoiceReview } from "@/features/invoices/actions";
 import { invoiceTotals, listInvoices, type InvoiceQueueRow } from "@/features/invoices/queries";
-import { canMap, requirePage, type AuthUser } from "@/lib/auth";
+import { canMap, getActiveEntity, requirePage, type AuthUser } from "@/lib/auth";
 import { ApprovalPanel } from "@/components/approvals/ApprovalPanel";
 import { hasOpenRequest } from "@/lib/approvals/engine";
 import ActionForm from "@/components/ActionForm";
@@ -62,12 +62,13 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
   const c = canMap(me, "invoices", ["certify", "approve", "pay"] as const);
   const { status } = await searchParams;
   const active = STATUSES.includes(status as InvoiceStatus) ? status : undefined;
-  const totals = invoiceTotals();
-  const rows = listInvoices(active);
+  const entity = await getActiveEntity();
+  const totals = invoiceTotals(entity.id);
+  const rows = listInvoices(entity.id, active);
   const pipeline = totals.submitted.count + totals.under_review.count;
   return (
     <>
-      <PageHeader title="Invoices" description="Subcontractor invoices across all projects: review, certify, approve and pay." />
+      <PageHeader title="Invoices" description={`Subcontractor invoices across all ${entity.country} projects: review, certify, approve and pay.`} />
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
         <Stat label="To certify" value={pipeline} tone={pipeline ? "warn" : "default"} hint={formatMoney(totals.submitted.amount + totals.under_review.amount, { compact: true })} />
         <Stat label="Certified" value={totals.certified.count} hint={formatMoney(totals.certified.amount, { compact: true })} />

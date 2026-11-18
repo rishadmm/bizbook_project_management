@@ -6,6 +6,11 @@ import { redirect } from "next/navigation";
 import { getDb } from "./db";
 import { MODULES, MODULE_KEYS, hasPermission, type ModuleKey, type PermissionMap } from "./permissions";
 import type { User } from "./types";
+import { allowedEntityIds, getEntityById, listEntities, defaultEntity, type Entity } from "./entities";
+import { setRequestCurrency } from "./request-context";
+
+/** Cookie holding the code of the country the user works in (top-bar switcher). Validated against user_entities on every request. */
+export const ENTITY_COOKIE = "bbp_entity";
 
 export const SESSION_COOKIE = "ops_session";
 export const SESSION_HOURS = 12;
@@ -18,8 +23,11 @@ export type AuthUser = User & {
   roleName: string;
   permissions: Record<ModuleKey, string[]>;
   isSuperAdmin: boolean;
+  /** ids of the countries (entities) the user may access: administrators all, others their user_entities */
+  entityIds: number[];
 };
-export type AuthSession = { user: AuthUser; sessionId: number };
+/** `entity` = the active country of this request, `entities` = every country the user may switch to. */
+export type AuthSession = { user: AuthUser; sessionId: number; entity: Entity; entities: Entity[] };
 
 export class ForbiddenError extends Error {
   constructor(public module: ModuleKey, public action: string) {
@@ -61,7 +69,16 @@ export function loadAuthUser(userId: number): AuthUser | null {
   const isSuperAdmin = roleCode === "super_admin";
   const { role_code: _rc, role_name: _rn, password_hash: _ph, ...base } = u;
   void _rc; void _rn; void _ph;
-  return { ...base, roleCode, roleName: u.role_name ?? roleCode, isSuperAdmin, permissions: resolvePermissions(u.id, u.role_id ?? null, isSuperAdmin) };
+  return { ...base, roleCode, roleName: u.role_name ?? roleCode, isSuperAdmin, permissions: resolvePermissions(u.id, u.role_id ?? null, isSuperAdmin),
+    entityIds: allowedEntityIds(u.id, isSuperAdmin || roleCode === "admin") };
+}
+
+/** Active country: cookie (if the user may access it) > the user's default country > the first allowed one > the first country. */
+export function pickActiveEntity(user: AuthUser, cookieCode: string | undefined): { entity: Entity; entities: Entity[] } {
+  const entities = listEntities().filter((e) => user.entityIds.includes(e.id));
+  const fromCookie = cookieCode ? entities.find((e) => e.code === cookieCode.toUpperCase()) : undefined;
+  const def = entities.find((e) => e.id === (user as unknown as { default_entity_id: number | null }).default_entity_id);
+  return { entity: fromCookie ?? def ?? entities[0] ?? getEntityById(user.entityIds[0]) ?? defaultEntity(), entities };
 }
 
 /** Current valid session (token hash, expiry, user status). Cached per request. */
@@ -76,8 +93,19 @@ export const getSession = cache(async (): Promise<AuthSession | null> => {
   const user = loadAuthUser(s.user_id);
   if (!user || user.status === "disabled" || user.status === "locked") return null;
   if (!s.last_seen_at || Date.now() - parseDbDate(s.last_seen_at) > 60_000) db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?").run(nowIso(), s.id);
-  return { user, sessionId: s.id };
+  const { entity, entities } = pickActiveEntity(user, jar.get(ENTITY_COOKIE)?.value);
+  setRequestCurrency(entity.currency); // formatMoney default for this request (request-scoped, see request-context.ts)
+  return { user, sessionId: s.id, entity, entities };
 });
+
+/** The country the signed-in user is working in (cookie-validated). Redirects to /login when there is no session. */
+export async function getActiveEntity(): Promise<Entity> {
+  const s = await getSession();
+  if (!s) redirect("/login");
+  return s.entity;
+}
+/** Active country id for the signed-in user (server actions / queries). */
+export async function activeEntityId(): Promise<number> { return (await getActiveEntity()).id; }
 
 export async function requireUser(): Promise<AuthUser> {
   const s = await getSession();
@@ -128,7 +156,7 @@ export async function requestMeta(): Promise<{ ip: string | null; userAgent: str
 }
 
 export type AuthEvent = "login_success" | "login_failed" | "logout" | "locked" | "password_changed" | "password_reset" | "session_revoked" | "user_created" | "user_disabled"
-  | "user_enabled" | "user_unlocked" | "user_updated" | "role_changed" | "permissions_changed";
+  | "user_enabled" | "user_unlocked" | "user_updated" | "role_changed" | "permissions_changed" | "entity_switched" | "entity_updated" | "fx_updated";
 
 export async function logAuthEvent(event: AuthEvent, o: { userId?: number | null; email?: string | null; detail?: string | null }): Promise<void> {
   const m = await requestMeta();

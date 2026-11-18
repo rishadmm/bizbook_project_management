@@ -37,3 +37,12 @@ export const Flash = ({ ok, error }: { ok?: string; error?: string }) => (
   </>
 );
 export const ReadOnlyNote = () => <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">Read-only admin view: submitting is disabled.</p>;
+
+/** "Awarded via tender RFX-…" (tender-sourced subcontracts) or "Direct assignment"; links to the tender page when the user may see tenders. */
+export function TenderSource({ slug, a, link }: { slug: string; a: { source?: string; rfx_id?: number | null; tender_code: string | null }; link: boolean }) {
+  if (a.source !== "tender" || !a.tender_code) return <span className="text-xs text-slate-400" data-testid="asg-source">Direct assignment</span>;
+  const text = `Awarded via tender ${a.tender_code}`;
+  return link
+    ? <a href={`/p/${slug}/tenders/${a.rfx_id}`} data-testid="asg-source" className="text-xs font-semibold text-indigo-700 hover:underline">{text}</a>
+    : <span data-testid="asg-source" className="text-xs font-semibold text-indigo-700">{text}</span>;
+}

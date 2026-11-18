@@ -291,10 +291,11 @@ export interface DelayAttribution {
  * plus by subcontractor where responsibility = 'subcontractor'. `projectId` null = whole portfolio.
  * Rows with responsibility 'none' and no days are ignored.
  */
-export function getDelayAttribution(projectId: number | null = null): DelayAttribution {
+export function getDelayAttribution(projectId: number | null = null, entityId?: number): DelayAttribution {
   const db = getDb();
-  const pf = projectId === null ? "" : " AND project_id = ?";
-  const args = projectId === null ? [] : [projectId];
+  // `entityId` (portfolio view): only projects of that country
+  const pf = projectId === null ? (entityId ? " AND project_id IN (SELECT id FROM projects WHERE entity_id = ?)" : "") : " AND project_id = ?";
+  const args = projectId === null ? (entityId ? [entityId] : []) : [projectId];
   const reps = db.prepare(`SELECT assignment_id, delay_responsibility r, delay_days d FROM progress_reports WHERE status='verified' AND delay_days > 0${pf}`).all(...args) as { assignment_id: number | null; r: DelayResponsibility; d: number }[];
   const iss = db.prepare(`SELECT assignment_id, responsibility r, impact_days d, impact_cost c FROM issues WHERE (impact_days > 0 OR impact_cost > 0)${pf}`).all(...args) as { assignment_id: number | null; r: DelayResponsibility; d: number; c: number }[];
   const byR = new Map<DelayResponsibility, { days: number; cost: number; count: number }>();
@@ -377,9 +378,9 @@ export interface SubcontractorPerformance {
 }
 
 /** Performance rollup per subcontractor (one id, or all subcontractors that have assignments). Sorted worst SPI first. */
-export function getSubcontractorPerformance(subcontractorId?: number): SubcontractorPerformance[] {
+export function getSubcontractorPerformance(subcontractorId?: number, entityId?: number): SubcontractorPerformance[] {
   const db = getDb();
-  const subs = db.prepare(`SELECT * FROM subcontractors ${subcontractorId ? "WHERE id = ?" : ""} ORDER BY name`).all(...(subcontractorId ? [subcontractorId] : [])) as
+  const subs = db.prepare(`SELECT * FROM subcontractors ${subcontractorId ? "WHERE id = ?" : entityId ? "WHERE entity_id = ?" : ""} ORDER BY name`).all(...(subcontractorId ? [subcontractorId] : entityId ? [entityId] : [])) as
     { id: number; name: string; trade: string | null; status: string; rating: number | null }[];
   const out: SubcontractorPerformance[] = [];
   for (const s of subs) {

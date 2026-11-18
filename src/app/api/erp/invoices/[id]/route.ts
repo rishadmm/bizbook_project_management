@@ -13,6 +13,6 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!can(session.user, "invoices", "view")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const id = Number((await ctx.params).id);
   const detail = Number.isInteger(id) ? getInvoiceDetail(id, { hashes: true }) : null;
-  if (!detail) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!detail || !session.user.entityIds.includes(detail.entity.id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(toErpPayload(detail, { baseUrl: new URL(req.url).origin }), { headers: { "Cache-Control": "no-store" } });
 }

@@ -24,9 +24,9 @@ function TempPassword({ email, password }: { email?: string; password: string })
   );
 }
 
-export interface UserFormValues { id?: number; name?: string; email?: string | null; department_id?: number | null; role_id?: number | null; job_title?: string | null; phone?: string | null; manager_id?: number | null }
+export interface UserFormValues { id?: number; entity_ids?: number[]; default_entity_id?: number | null; name?: string; email?: string | null; department_id?: number | null; role_id?: number | null; job_title?: string | null; phone?: string | null; manager_id?: number | null }
 
-export function UserForm({ values, departments, roles, users, mode }: { values?: UserFormValues; departments: Opt[]; roles: Opt[]; users: Opt[]; mode: "create" | "edit" }) {
+export function UserForm({ values, departments, roles, users, entities, mode }: { values?: UserFormValues; departments: Opt[]; roles: Opt[]; users: Opt[]; entities: { id: number; label: string; flag: string | null }[]; mode: "create" | "edit" }) {
   const [s, action, pending] = useActionState<AdminState, FormData>(mode === "create" ? createUserAction : updateUserAction, undefined);
   const [generate, setGenerate] = useState(true);
   return (
@@ -39,6 +39,21 @@ export function UserForm({ values, departments, roles, users, mode }: { values?:
       <Field label="Job title"><Input name="job_title" defaultValue={values?.job_title ?? ""} /></Field>
       <Field label="Phone"><Input name="phone" defaultValue={values?.phone ?? ""} /></Field>
       <Field label="Manager" hint="Used by approval workflows (requester manager)."><Select name="manager_id" defaultValue={values?.manager_id ?? ""} options={users.filter((u) => u.value !== values?.id)} placeholder="—" /></Field>
+      <fieldset className="sm:col-span-2" data-testid="user-countries">
+        <legend className="mb-1 text-sm font-medium text-slate-700">Country access</legend>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {entities.map((e) => (
+            <label key={e.id} className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" name="entity_ids" value={e.id} defaultChecked={values?.entity_ids ? values.entity_ids.includes(e.id) : e.id === entities[0]?.id} className="h-4 w-4" />
+              <span aria-hidden>{e.flag}</span>{e.label}
+            </label>
+          ))}
+          <label className="ml-auto flex items-center gap-2 text-sm text-slate-700">Default country
+            <select name="default_entity_id" defaultValue={values?.default_entity_id ?? entities[0]?.id} className="rounded-lg border border-line bg-white px-2 py-1 text-sm">{entities.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}</select>
+          </label>
+        </div>
+        <p className="mt-1 text-xs text-slate-400">Administrators always see every country. Users only see data of the countries ticked here.</p>
+      </fieldset>
       {mode === "create" && (
         <div className="space-y-2 sm:col-span-2">
           <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="generate" checked={generate} onChange={(e) => setGenerate(e.target.checked)} className="h-4 w-4" /> Generate a temporary password</label>

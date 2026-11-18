@@ -23,6 +23,23 @@ function guardSuper(me: AuthUser, t: Target | undefined, newRole?: RoleRef) {
   if (newRole?.code === "super_admin" && !me.isSuperAdmin) throw new Error("Only a super admin can assign the super admin role.");
 }
 
+/** Country access from the user form: `entity_ids` (multi) + `default_entity_id`. No selection = the first country; the default must be one of the selected countries. */
+function parseEntityAccess(form: FormData): { ids: number[]; def: number } {
+  const all = (getDb().prepare("SELECT id FROM entities WHERE status = 'active' ORDER BY sort_order, id").all() as { id: number }[]).map((e) => e.id);
+  let ids = form.getAll("entity_ids").map((v) => Number(v)).filter((n) => all.includes(n));
+  if (!ids.length) ids = [all[0]];
+  const d = intOrNull(form, "default_entity_id");
+  return { ids, def: d && ids.includes(d) ? d : ids[0] };
+}
+function saveEntityAccess(userId: number, a: { ids: number[]; def: number }) {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM user_entities WHERE user_id = ?").run(userId);
+    for (const e of a.ids) db.prepare("INSERT INTO user_entities(user_id, entity_id) VALUES (?,?)").run(userId, e);
+    db.prepare("UPDATE users SET default_entity_id = ? WHERE id = ?").run(a.def, userId);
+  })();
+}
+
 /* ------------------------------------------------------------------ users */
 
 export async function createUserAction(_p: AdminState, form: FormData): Promise<AdminState> {
@@ -43,6 +60,7 @@ export async function createUserAction(_p: AdminState, form: FormData): Promise<
     `INSERT INTO users(name, email, department_id, role, role_id, job_title, phone, manager_id, password_hash, must_change_password, status, password_changed_at)
      VALUES (?,?,?,?,?,?,?,?,?,?, 'active', ?)`,
   ).run(name, email, intOrNull(form, "department_id"), role.code, role.id, str(form, "job_title") || null, str(form, "phone") || null, intOrNull(form, "manager_id"), hashPassword(pw), mustChange, nowIso());
+  saveEntityAccess(Number(r.lastInsertRowid), parseEntityAccess(form));
   await logAuthEvent("user_created", { userId: Number(r.lastInsertRowid), email, detail: `by ${me.email}; role ${role.code}` });
   revalidatePath("/admin/users");
   return { ok: `User ${name} created.`, tempPassword: pw, email };
@@ -66,6 +84,7 @@ export async function updateUserAction(_p: AdminState, form: FormData): Promise<
   if (mgr === id) return { error: "A user cannot be their own manager." };
   db.prepare("UPDATE users SET name=?, email=?, department_id=?, role=?, role_id=?, job_title=?, phone=?, manager_id=? WHERE id=?")
     .run(name, email, intOrNull(form, "department_id"), role.code, role.id, str(form, "job_title") || null, str(form, "phone") || null, mgr, id);
+  saveEntityAccess(id, parseEntityAccess(form));
   await logAuthEvent(role.id !== t.role_id ? "role_changed" : "user_updated", { userId: id, email, detail: `by ${me.email}${role.id !== t.role_id ? `; role ${t.role_code} -> ${role.code}` : ""}` });
   revalidatePath("/admin/users"); revalidatePath(`/admin/users/${id}`);
   return { ok: "User saved." };

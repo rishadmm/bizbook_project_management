@@ -2,7 +2,7 @@ import { AlertTriangle, Eye, Pencil, RotateCcw, Trash2, UserPlus } from "lucide-
 import { Badge, Button, CardSection, EmptyState, ModalButton, Table, TBody, TD, TH, THead, TR } from "@/components/ui";
 import ConfirmButton from "@/features/projects/components/ConfirmButton";
 import { formatDateTime } from "@/lib/format";
-import { getSetting } from "@/lib/db";
+import { getEntityById, entityOfSubcontractor } from "@/lib/entities";
 import { portalRoleLabel } from "@/lib/portal-core";
 import { requestOrigin } from "@/lib/portal-auth";
 import { deletePortalUser, decideChangeRequest, setPortalUserStatus, signOutPortalUser, unlockPortalUser } from "../actions";
@@ -26,7 +26,7 @@ export default async function PortalAccessTab({ sub, canManage, canViewAs }: { s
   const requests = getChangeRequests(sub.id);
   const asgs = getPortalAssignmentsLite(sub.id);
   const origin = await requestOrigin();
-  const tenant = getSetting("company_name", "Al Noor Infrastructure LLC");
+  const tenant = getEntityById(entityOfSubcontractor(sub.id))?.legal_name ?? "";
   const pendingDocs = pendingDocumentCount(sub.id);
   const slug = sub.portal_slug ?? "";
   const pendingReq = requests.filter((r) => r.status === "pending");
